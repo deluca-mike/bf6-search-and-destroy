@@ -1,9 +1,9 @@
 {
-    "name": "bf6-portal-scripting-template",
-    "experienceName": "Scripting Template",
-    "version": "1.4.0",
+    "name": "bf6-search-and-destroy",
+    "experienceName": "Search and Destroy",
+    "version": "0.0.27",
     "type": "module",
-    "description": "Scripting template for Battlefield 6 Portal (use \"Use this template\" on GitHub to create a new project)",
+    "description": "BF6 Portal Search and Destroy game mode",
     "engines": {
         "node": ">=23.0.0"
     },
@@ -23,7 +23,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/deluca-mike/bf6-portal-scripting-template.git"
+        "url": "git+https://github.com/deluca-mike/bf6-search-and-destroy.git"
     },
     "keywords": [
         "template",
@@ -35,9 +35,9 @@
     "author": "Michael De Luca",
     "license": "MIT",
     "bugs": {
-        "url": "https://github.com/deluca-mike/bf6-portal-scripting-template/issues"
+        "url": "https://github.com/deluca-mike/bf6-search-and-destroy/issues"
     },
-    "homepage": "https://github.com/deluca-mike/bf6-portal-scripting-template#readme",
+    "homepage": "https://github.com/deluca-mike/bf6-search-and-destroy#readme",
     "devDependencies": {
         "@bf6mods/portal": "^1.1.0",
         "@clack/prompts": "^1.0.0",
