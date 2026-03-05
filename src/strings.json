@@ -11,7 +11,11 @@
                 "enablePlayerDeploy": "Enable Player Deploy",
                 "disablePlayerDeploy": "Disable Player Deploy",
                 "switchTeams": "Switch Teams",
-                "toggleTeam": "Toggle Team"
+                "toggleTeam": "Toggle Team",
+                "createMCOMA": "Create MCOM A",
+                "createMCOMB": "Create MCOM B",
+                "disposeMCOMA": "Dispose MCOM A",
+                "disposeMCOMB": "Dispose MCOM B"
             }
         }
     }

@@ -1,24 +1,15 @@
 import { Events } from 'bf6-portal-utils/events/index.ts';
 import { Timers } from 'bf6-portal-utils/timers/index.ts';
-import { UI } from 'bf6-portal-utils/ui/index.ts';
 import { MultiClickDetector } from 'bf6-portal-utils/multi-click-detector/index.ts';
 
 import { DebugTool } from './debug-tool/index.ts';
 import { getPlayerStateVectorString } from './helpers/index.ts';
+import { Vectors } from 'bf6-portal-utils/vectors/index.ts';
 // import { SearchAndDestroy } from './search-and-destroy/index.ts';
 
-const OBJECTIVE_1 = {
-    x: 334.89,
-    y: 69.32,
-    z: 134.06,
-    orientation: 90,
-};
-
-const OBJECTIVE_2 = {
-    x: 342.36,
-    y: 69.24,
-    z: 137.11,
-    orientation: 270,
+const MCOM_POOLS = {
+    A: [111, 211, 311],
+    B: [112, 212, 312],
 };
 
 // const roundObjectives: SearchAndDestroy.RoundObjectives[] = [
@@ -34,6 +25,8 @@ const OBJECTIVE_2 = {
 
 let adminDebugTool: DebugTool | undefined;
 let telemetryInterval: number | undefined;
+let mcomA: MCOM | undefined;
+let mcomB: MCOM | undefined;
 
 function createAdminDebugTool(player: mod.Player): void {
     if (mod.GetObjId(player) != 0) return;
@@ -117,6 +110,76 @@ function createAdminDebugTool(player: mod.Player): void {
         mod.SetTeam(player, mod.GetTeam(mod.GetObjId(mod.GetTeam(player)) === 1 ? 2 : 1));
     });
 
+    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.createMCOMA), async () => {
+        adminDebugTool?.dynamicLog(`Creating MCOM A`);
+
+        mcomA = MCOM.createMCOM('A', 90, {
+            enabled: true,
+            onArmed: () => {
+                adminDebugTool?.dynamicLog(`MCOM A armed`);
+            },
+            onDefused: () => {
+                adminDebugTool?.dynamicLog(`MCOM A defused`);
+            },
+            onDestroyed: () => {
+                adminDebugTool?.dynamicLog(`MCOM A destroyed`);
+            },
+            onSecond: (seconds) => {
+                adminDebugTool?.dynamicLog(`MCOM A: ${seconds} seconds remaining`);
+            },
+            onMinute: (minutes) => {
+                adminDebugTool?.dynamicLog(`MCOM A: ${minutes} minutes remaining`);
+            },
+        });
+
+        if (!mcomA) {
+            adminDebugTool?.dynamicLog(`Failed to create MCOM A`);
+            return;
+        }
+
+        adminDebugTool?.dynamicLog(`MCOM A created at ${Vectors.getVectorString(mcomA.position)}`);
+    });
+
+    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.createMCOMB), async () => {
+        adminDebugTool?.dynamicLog(`Creating MCOM B`);
+
+        mcomB = MCOM.createMCOM('B', 30, {
+            enabled: true,
+            onArmed: () => {
+                adminDebugTool?.dynamicLog(`MCOM B armed`);
+            },
+            onDefused: () => {
+                adminDebugTool?.dynamicLog(`MCOM B defused`);
+            },
+            onDestroyed: () => {
+                adminDebugTool?.dynamicLog(`MCOM B destroyed`);
+            },
+            onSecond: (seconds) => {
+                adminDebugTool?.dynamicLog(`MCOM B: ${seconds} seconds remaining`);
+            },
+            onMinute: (minutes) => {
+                adminDebugTool?.dynamicLog(`MCOM B: ${minutes} minutes remaining`);
+            },
+        });
+
+        if (!mcomB) {
+            adminDebugTool?.dynamicLog(`Failed to create MCOM B`);
+            return;
+        }
+
+        adminDebugTool?.dynamicLog(`MCOM B created at ${Vectors.getVectorString(mcomB.position)}`);
+    });
+
+    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.disposeMCOMA), async () => {
+        adminDebugTool?.dynamicLog(`Disposing MCOM A`);
+        mcomA?.dispose();
+    });
+
+    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.disposeMCOMB), async () => {
+        adminDebugTool?.dynamicLog(`Disposing MCOM B`);
+        mcomB?.dispose();
+    });
+
     // Log a message to the static logger.
     adminDebugTool?.staticLog(`Triple-click interact key to open debug menu.`, 0);
 
@@ -172,21 +235,15 @@ function stopTelemetry(player: mod.Player): void {
     Timers.clearInterval(telemetryInterval);
 }
 
-// Event subscription needed for handling UI button events.
-Events.OnPlayerUIButtonEvent.subscribe(UI.handleButtonEvent);
-
 // Event subscriptions for the admin debug tool.
 Events.OnPlayerJoinGame.subscribe(createAdminDebugTool);
 Events.OnPlayerDeployed.subscribe(showTelemetry);
 Events.OnPlayerUndeploy.subscribe(stopTelemetry);
 Events.OnPlayerLeaveGame.subscribe((eventNumber) => destroyAdminDebugTool());
 
-// Event subscriptions needed for multi-click detectors.
-Events.OngoingPlayer.subscribe(MultiClickDetector.handleOngoingPlayer);
-Events.OnPlayerLeaveGame.subscribe(MultiClickDetector.pruneInvalidPlayers);
-
-// Events.OnGameModeStarted.subscribe(() => {
-//     SearchAndDestroy.start({
-//         roundObjectives,
-//     });
-// });
+Events.OnGameModeStarted.subscribe(() => {
+    MCOM.setMCOMPools(MCOM_POOLS);
+    // SearchAndDestroy.start({
+    //     roundObjectives,
+    // });
+});
