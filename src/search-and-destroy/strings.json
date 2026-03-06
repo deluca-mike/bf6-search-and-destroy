@@ -1,0 +1,10 @@
+{
+    "searchAndDestroy": {
+        "gameStartCountdown": "Game starting in {} seconds...",
+        "roundStartCountdown": "Round {} starting in {} seconds...",
+        "roundDeploymentCountdown": "Deployment in {} seconds...",
+        "roundEndCountdown": "Round {} ends in {} seconds...",
+        "switchingSidesCountdown": "Switching sides in {} seconds...",
+        "gameEndCountdown": "Game ending in {} seconds..."
+    }
+}
