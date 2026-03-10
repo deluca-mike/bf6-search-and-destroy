@@ -246,17 +246,17 @@ export namespace SearchAndDestroy {
     const ALLOW_SWITCH_TEAMS = true; // true for no revives.
     const SKIP_MAN_DOWN = true;
     const ROUND_DELAY_DURATION = 5;
-    const ROUNDS_DURATION = 360; // TODO: reset to 360 seconds = 6 minutes
-    const OBJECTIVE_FUSE_DURATION = 20; // TODO: reset to 60 seconds
+    const ROUNDS_DURATION = 360;
+    const OBJECTIVE_FUSE_DURATION = 60;
     const OBJECTIVE_ARM_DURATION = 7;
     const OBJECTIVE_DEFUSE_DURATION = 10;
     const GAME_START_INFO_DURATION = 30;
     const ROUND_START_INFO_DURATION = 5;
     const ROUND_END_TEARDOWN_DELAY_DURATION = 5;
     const ROUND_END_INFO_DURATION = 10;
-    const GAME_END_INFO_DURATION = 15;
+    const GAME_END_INFO_DURATION = 10;
 
-    const GREEN = mod.CreateVector(0.49, 0.81, 0.41); // #7DCE68
+    // const GREEN = mod.CreateVector(0.49, 0.81, 0.41); // #7DCE68
 
     const FRIENDLY_COLOR_BRIGHT = mod.CreateVector(0.471, 0.949, 1.0); // #78F2FF
     const FRIENDLY_COLOR_BACKGROUND = mod.CreateVector(0.471 / 2.5, 0.949 / 2.5, 1.0 / 2.5);
@@ -617,13 +617,17 @@ export namespace SearchAndDestroy {
             }
         }
 
-        public static switchUnit(soldier: Soldier, unit: Unit): void {
-            // TODO: Somehow make sure the unit size is not exceeded.
+        public static switchUnit(soldier: Soldier, unit: Unit): boolean {
             const currentUnit = Unit._SOLDIERS_UNIT_MAP.get(soldier.playerId);
 
             if (!currentUnit) {
                 logger.log(`<U> Unit not found for P-${soldier.playerId}`, LogLevel.Error);
-                return;
+                return false;
+            }
+
+            if (unit.soldierCount >= 8) {
+                logger.log(`<U> Unit ${unit.name} already has ${unit.soldierCount} soldiers`, LogLevel.Warning);
+                return false;
             }
 
             logger.log(
@@ -631,13 +635,14 @@ export namespace SearchAndDestroy {
                 LogLevel.Info
             );
 
-            // TODO: Need to undeploy the player first, and also ensure it can only happen at appropriate times.
-
+            // TODO: If this can happen after the game started, need to undeploy the player first.
             mod.SetTeam(soldier.player, unit.team);
 
             currentUnit._SOLDIERS.delete(soldier);
             unit._SOLDIERS.add(soldier);
             Unit._SOLDIERS_UNIT_MAP.set(soldier.playerId, unit);
+
+            return true;
         }
 
         static {
@@ -1171,7 +1176,7 @@ export namespace SearchAndDestroy {
 
         const unit = soldier.unit === ALPHA_UNIT ? BRAVO_UNIT : ALPHA_UNIT;
 
-        Unit.switchUnit(soldier, unit);
+        if (!Unit.switchUnit(soldier, unit)) return;
 
         setGameState((s) => {
             s.playerMap[soldier.playerId] = unit.name;
@@ -1278,7 +1283,7 @@ export namespace SearchAndDestroy {
             const visible = SolidUI.createMemo(() => gameState.gameStarted && !gameState.currentRoundId);
 
             const gameMode = SolidUI.h(UIText, {
-                x: 160,
+                x: 155,
                 y: 130,
                 width: 500,
                 height: 30,
@@ -1325,9 +1330,17 @@ export namespace SearchAndDestroy {
                 bgColor: UI.COLORS.WHITE,
                 bgAlpha: 1,
                 bgFill: mod.UIBgFill.OutlineThin,
-                enabled: true, // TODO: add condition to enable/disable button
+                enabled: SolidUI.createMemo(() => {
+                    return (
+                        gameOptions.allowSwitchTeams &&
+                        visible() &&
+                        gameState.activePlayers[
+                            gameState.playerMap[this._playerId] === ALPHA_UNIT.name ? BRAVO_UNIT.name : ALPHA_UNIT.name
+                        ] < 8
+                    );
+                }),
                 uiInputModeWhenVisible: true,
-                visible,
+                visible: () => gameOptions.allowSwitchTeams && visible(),
                 onClick: () => switchUnit(this._player),
                 receiver: this._player,
             });
@@ -1709,7 +1722,7 @@ export namespace SearchAndDestroy {
                 message: () =>
                     mod.Message(
                         mod.stringkeys.searchAndDestroy.nextRoundCountdown,
-                        gameState.currentRoundId,
+                        gameState.currentRoundId + 1,
                         gameState.totalRounds,
                         gameState.clock
                     ),
