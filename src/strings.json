@@ -2,18 +2,6 @@
     "template": {
         "debug": {
             "buttons": {
-                "disableAllMCOMs": "Disable All MCOMs",
-                "enableRoundMCOMs": "Enable Round MCOMs",
-                "deleteRoundMCOMs": "Delete Round MCOMs",
-                "deployAll": "Deploy All",
-                "undeployAll": "Undeploy All",
-                "deployPlayer": "Deploy Player",
-                "undeployPlayer": "Undeploy Player",
-                "enableAllDeploy": "Enable All Deploy",
-                "disableAllDeploy": "Disable All Deploy",
-                "enablePlayerDeploy": "Enable Player Deploy",
-                "disablePlayerDeploy": "Disable Player Deploy",
-                "switchTeams": "Switch Teams",
                 "toggleTeam": "Toggle Team"
             }
         }

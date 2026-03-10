@@ -1,10 +1,36 @@
 {
     "searchAndDestroy": {
-        "gameStartCountdown": "Game starting in {} seconds...",
-        "roundStartCountdown": "Round {} starting in {} seconds...",
-        "roundDeploymentCountdown": "Deployment in {} seconds...",
-        "roundEndCountdown": "Round {} ends in {} seconds...",
-        "switchingSidesCountdown": "Switching sides in {} seconds...",
-        "gameEndCountdown": "Game ending in {} seconds..."
+        "gameMode": "SEARCH AND DESTROY (BEST OF {})",
+        "alphaSide": "ALPHA: ATTACKING FIRST",
+        "bravoSide": "BRAVO: DEFENDING FIRST",
+        "switchTeams": "SWITCH TEAMS ({}s)",
+        "round": "ROUND {}",
+        "attacking": "ATTACKING",
+        "defending": "DEFENDING",
+        "threshold": "FIRST TO {} WINS",
+        "attackingDescription": "DESTROY AN OBJECTIVE OR ELIMINATE ALL ENEMIES",
+        "defendingDescription": "DEFEND THE OBJECTIVES OR ELIMINATE ALL ENEMIES",
+        "roundDeploymentCountdown": "AUTO DEPLOY IN {}",
+        "clock": "{}:{}{}",
+        "roundWon": "ROUND WON",
+        "roundLost": "ROUND LOST",
+        "winReasons": {
+            "objectiveDestroyed": "WE DESTROYED THE OBJECTIVE",
+            "objectivesDefended": "WE DEFENDED THE OBJECTIVES",
+            "objectiveDisarmed": "WE DISARMED THE OBJECTIVE",
+            "enemiesEliminated": "WE ELIMINATED ALL THREATS"
+        },
+        "loseReasons": {
+            "objectiveDestroyed": "THE ENEMY DESTROYED THE OBJECTIVE",
+            "objectivesDefended": "THE ENEMY DEFENDED THE OBJECTIVES",
+            "objectiveDisarmed": "THE ENEMY DISARMED THE OBJECTIVE",
+            "enemiesEliminated": "THE ENEMY ELIMINATED ALL THREATS"
+        },
+        "nextRoundCountdown": "ROUND {} OF {} STARTING IN {}",
+        "victory": "VICTORY",
+        "defeat": "DEFEAT",
+        "victoryReason": "WE WON {} ROUNDS",
+        "defeatReason": "WE LOST {} ROUNDS",
+        "gameEndCountdown": "GAME ENDING IN {}"
     }
 }

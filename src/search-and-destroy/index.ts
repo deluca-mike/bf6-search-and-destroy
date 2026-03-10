@@ -7,6 +7,8 @@ import { SolidUI } from 'bf6-portal-utils/solid-ui/index.ts';
 import { UI } from 'bf6-portal-utils/ui/index.ts';
 import { UIContainer } from 'bf6-portal-utils/ui/components/container/index.ts';
 import { UIText } from 'bf6-portal-utils/ui/components/text/index.ts';
+import { UIImage } from 'bf6-portal-utils/ui/components/image/index.ts';
+import { UITextButton } from 'bf6-portal-utils/ui/components/text-button/index.ts';
 
 export namespace SearchAndDestroy {
     // #region Logging
@@ -243,18 +245,25 @@ export namespace SearchAndDestroy {
     const FORCE_DEPLOY = true;
     const ALLOW_SWITCH_TEAMS = true; // true for no revives.
     const SKIP_MAN_DOWN = true;
-    const ROUND_DELAY_DURATION = 10;
-    const ROUNDS_DURATION = 60; // TODO: reset to 360 seconds = 6 minutes
-    const ROUNDS_TO_WIN = 5; // TODO: This needs to be tied to the experience timing settings.
+    const ROUND_DELAY_DURATION = 5;
+    const ROUNDS_DURATION = 360; // TODO: reset to 360 seconds = 6 minutes
     const OBJECTIVE_FUSE_DURATION = 20; // TODO: reset to 60 seconds
     const OBJECTIVE_ARM_DURATION = 7;
     const OBJECTIVE_DEFUSE_DURATION = 10;
-    const GAME_START_INFO_DURATION = 15;
-    const ROUND_START_INFO_DURATION = 10;
+    const GAME_START_INFO_DURATION = 30;
+    const ROUND_START_INFO_DURATION = 5;
     const ROUND_END_TEARDOWN_DELAY_DURATION = 5;
     const ROUND_END_INFO_DURATION = 10;
-    const FLIP_TEAMS_BUFFER_DURATION_MS = 2_000;
-    const GAME_END_INFO_DURATION = 10;
+    const GAME_END_INFO_DURATION = 15;
+
+    const GREEN = mod.CreateVector(0.49, 0.81, 0.41); // #7DCE68
+
+    const FRIENDLY_COLOR_BRIGHT = mod.CreateVector(0.471, 0.949, 1.0); // #78F2FF
+    const FRIENDLY_COLOR_BACKGROUND = mod.CreateVector(0.471 / 2.5, 0.949 / 2.5, 1.0 / 2.5);
+    const FRIENDLY_COLOR_DARK = mod.CreateVector(0.416, 0.599, 0.657); // #6A99A8
+    const ENEMY_COLOR_BRIGHT = mod.CreateVector(0.996, 0.561, 0.443); // #FE8F71
+    const ENEMY_COLOR_BACKGROUND = mod.CreateVector(0.996 / 2.5, 0.561 / 2.5, 0.443 / 2.5);
+    const ENEMY_COLOR_DARK = mod.CreateVector(0.749, 0.498, 0.431); // #BF7F6E
 
     // #endregion
 
@@ -263,6 +272,15 @@ export namespace SearchAndDestroy {
     class Round {
         public static readonly DEFAULT_DELAY_DURATION = 20;
         public static readonly DEFAULT_ROUND_DURATION = 360; // 360 seconds = 6 minutes
+
+        public static currentRound?: Round;
+
+        public static handleSoldierJoined(soldier: Soldier): void {
+            // If there is a current round and deployment has already happened, don't do anything.
+            if (Round.currentRound?._deploymentTime) return;
+
+            soldier.state = Soldier.State.NotYetDeployed;
+        }
 
         public constructor(params: Round.Params) {
             this._delayDuration = params.delayDuration ?? Round.DEFAULT_DELAY_DURATION;
@@ -274,6 +292,7 @@ export namespace SearchAndDestroy {
             this._onRoundEnd = params.onRoundEnd;
             this._onDeploymentCountdownSecond = params.onDeploymentCountdownSecond;
             this._onDeploymentReleased = params.onDeploymentReleased;
+            this._onArmed = params.onArmed;
 
             const objectiveOptions: Objective.Options = {
                 armDuration: params.objectiveArmDuration ?? OBJECTIVE_ARM_DURATION,
@@ -294,12 +313,19 @@ export namespace SearchAndDestroy {
             }
 
             this._roundClock = new Clocks.CountDownClock(this._roundDuration, {
-                onComplete: () => this._end(),
+                onComplete: () => {
+                    // Don't let the clock completion call `_end` if an objective is armed, since the destroyed or
+                    // disarmed objective event will call `_end` instead.
+                    if (this._armedObjective) return;
+
+                    this._end(Round.WinCondition.ObjectivesDefended, this._defendingUnit);
+                },
                 onSecond: (seconds) => {
                     this._onRoundCountdownSecond?.(seconds);
-                    logger.log(`<R> Round ends in ${seconds}s...`, LogLevel.Debug);
                 },
             });
+
+            Round.currentRound = this;
 
             if (logger.willLog(LogLevel.Info)) {
                 logger.log(
@@ -319,12 +345,14 @@ export namespace SearchAndDestroy {
         private _deploymentTime?: number;
         private _endTime?: number;
         private _winningUnit?: Unit;
+        private _winCondition?: Round.WinCondition;
         private _armedObjective?: Objective;
         private _roundClock: Clocks.CountDownClock;
         private _onRoundCountdownSecond?: (seconds: number) => void;
         private _onRoundEnd: () => Promise<void> | void;
         private _onDeploymentCountdownSecond?: (seconds: number) => void;
         private _onDeploymentReleased?: () => Promise<void> | void;
+        private _onArmed?: () => Promise<void> | void;
 
         public start(): void {
             if (this._startTime) {
@@ -334,6 +362,8 @@ export namespace SearchAndDestroy {
 
             this._startTime = Date.now();
 
+            Soldier.setStateForAll(Soldier.State.NotYetDeployed);
+
             const deploymentClock = new Clocks.CountDownClock(this._delayDuration, {
                 onComplete: () => {
                     if (logger.willLog(LogLevel.Info)) {
@@ -341,9 +371,6 @@ export namespace SearchAndDestroy {
                     }
 
                     this._deploymentTime = Date.now();
-
-                    Soldier.setStateForAll(Soldier.State.NotYetDeployed);
-
                     this._onDeploymentReleased?.();
 
                     // Release all players for the round duration.
@@ -353,45 +380,47 @@ export namespace SearchAndDestroy {
                 },
                 onSecond: (seconds) => {
                     this._onDeploymentCountdownSecond?.(seconds);
-                    logger.log(`<R> Deployment in ${seconds}s...`, LogLevel.Debug);
                 },
             });
 
             deploymentClock.start();
         }
 
-        private _end(): void {
+        private _end(winCondition: Round.WinCondition, winningUnit: Unit): void {
             if (this._endTime) {
                 logger.log(`<R> Round already ended`, LogLevel.Warning);
                 return;
             }
 
             this._endTime = Date.now();
+            this._roundClock.stop();
             this._deploymentManager.lock(); // Lock all players from deploying indefinitely.
-            Soldier.setStateForAll(Soldier.State.Undeployed);
 
-            this._winningUnit = this._armedObjective
-                ? this._attackingUnit
-                : this._defendingUnit.activeSoldiers.length > 0
-                  ? this._defendingUnit
-                  : this._attackingUnit;
+            this._winCondition = winCondition;
+            this._winningUnit = winningUnit;
 
             if (logger.willLog(LogLevel.Info)) {
                 logger.log(
-                    `<R> ${this._winningUnit === this._attackingUnit ? 'Attackers' : 'Defenders'} (${this._winningUnit.name}) won`,
+                    `<R> ${winningUnit.teamId === this._attackingUnit.teamId ? 'Attackers' : 'Defenders'} (${winningUnit.name}) won`,
                     LogLevel.Info
                 );
+            }
+
+            // Disable all objectives.
+            for (const otherObjective of this._objectives) {
+                otherObjective.disable();
             }
 
             // Don't undeploy MCOMs and players that are alive abruptly.
             Timers.setTimeout(() => {
                 mod.UndeployAllPlayers();
+                Soldier.setStateForAll(Soldier.State.Undeployed);
 
                 while (this._objectives.length > 0) {
                     this._objectives.pop()?.remove();
                 }
 
-                if (logger.willLog(LogLevel.Info)) {
+                if (logger.willLog(LogLevel.Debug)) {
                     logger.log(`<R> Undeployed all players and removed all objectives`, LogLevel.Info);
                 }
             }, ROUND_END_TEARDOWN_DELAY_DURATION * 1_000); // Convert seconds to milliseconds.
@@ -405,8 +434,8 @@ export namespace SearchAndDestroy {
                 return;
             }
 
-            // Round no loner bound by default timer as there is an active objective.
             this._armedObjective = objective;
+            this._onArmed?.();
 
             // Disable all other objectives.
             for (const otherObjective of this._objectives) {
@@ -415,6 +444,7 @@ export namespace SearchAndDestroy {
                 otherObjective.disable();
             }
 
+            // Round no longer bound by default timer as there is an active objective.
             this._roundClock.reset();
             this._roundClock.setDuration(objective.timeLeft!);
             this._roundClock.start();
@@ -437,7 +467,7 @@ export namespace SearchAndDestroy {
                 logger.log(`<R> Objective defused. Stopped round clock and ending round`, LogLevel.Info);
             }
 
-            this._end();
+            this._end(Round.WinCondition.ObjectiveDisarmed, this._defendingUnit);
         }
 
         private _handleObjectiveDestroyed(objective: Objective): void {
@@ -452,21 +482,24 @@ export namespace SearchAndDestroy {
                 logger.log(`<R> Objective destroyed. Stopped round clock and ending round`, LogLevel.Info);
             }
 
-            this._end();
+            this._end(Round.WinCondition.ObjectiveDestroyed, this._attackingUnit);
         }
 
-        public handleSoldierEliminated(unit: Unit): void {
+        public handleSoldierEliminated(soldier: Soldier): void {
             // Don't end the round if it has already ended or the unit has active soldiers.
-            if (this._endTime || unit.activeSoldiers.length) return;
+            if (this._endTime || soldier.unit.activeSoldiers.length) return;
 
             if (logger.willLog(LogLevel.Info)) {
-                logger.log(`<R> Unit ${unit.name} has no active soldiers`, LogLevel.Info);
+                logger.log(`<R> Unit ${soldier.unit.name} has no active soldiers`, LogLevel.Info);
             }
 
             // Don't end the round if the attacking unit has an armed objective, even if it has no active soldiers.
-            if (unit === this._attackingUnit && this._armedObjective) return;
+            if (soldier.unit === this._attackingUnit && this._armedObjective) return;
 
-            this._end();
+            const winningUnit =
+                soldier.unit.teamId === this._attackingUnit.teamId ? this._defendingUnit : this._attackingUnit;
+
+            this._end(Round.WinCondition.EnemyEliminated, winningUnit);
         }
 
         public get startTime(): number | undefined {
@@ -500,9 +533,20 @@ export namespace SearchAndDestroy {
         public get winningUnit(): Unit | undefined {
             return this._winningUnit;
         }
+
+        public get winCondition(): Round.WinCondition | undefined {
+            return this._winCondition;
+        }
     }
 
     namespace Round {
+        export enum WinCondition {
+            ObjectiveDestroyed = 'objectiveDestroyed',
+            ObjectiveDisarmed = 'objectiveDisarmed',
+            ObjectivesDefended = 'objectivesDefended',
+            EnemyEliminated = 'enemyEliminated',
+        }
+
         export type ObjectivePositions = Objective.Position[];
 
         export type Params = {
@@ -519,73 +563,81 @@ export namespace SearchAndDestroy {
             onRoundEnd: () => Promise<void> | void;
             onDeploymentCountdownSecond?: (seconds: number) => void;
             onDeploymentReleased?: () => Promise<void> | void;
+            onArmed?: () => Promise<void> | void;
         };
     }
 
     class Unit {
         private static readonly _UNITS = new Map<number, Unit>();
 
-        public static getUnit(teamId: number): Unit {
+        private static readonly _SOLDIERS_UNIT_MAP = new Map<number, Unit>();
+
+        public static getUnitByTeamId(teamId: number): Unit {
             return Unit._UNITS.get(teamId)!;
         }
 
-        public static async flipTeams(teamId1: number, teamId2: number): Promise<void> {
-            return new Promise((resolve) => {
-                const unit1 = Unit.getUnit(teamId1);
-                const unit2 = Unit.getUnit(teamId2);
-
-                if (!unit1) {
-                    logger.log(`<U> Unit not found for team ${teamId1}`, LogLevel.Error);
-                    return;
-                }
-
-                if (!unit2) {
-                    logger.log(`<U> Unit not found for team ${teamId2}`, LogLevel.Error);
-                    return;
-                }
-
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(
-                        `<U> Flipping teams ${unit1.name} (${teamId1}) and ${unit2.name} (${teamId2})...`,
-                        LogLevel.Info
-                    );
-                }
-
-                mod.SwitchTeams(unit1._team, unit2._team);
-                unit1._team = mod.GetTeam((unit1._teamId = teamId2));
-                unit2._team = mod.GetTeam((unit2._teamId = teamId1));
-
-                Unit._UNITS.set(teamId2, unit1);
-                Unit._UNITS.set(teamId1, unit2);
-
-                Timers.setTimeout(() => {
-                    if (logger.willLog(LogLevel.Info)) {
-                        logger.log(
-                            `<U> Teams ${unit1.name} (${teamId1}) and ${unit2.name} (${teamId2}) flipped`,
-                            LogLevel.Info
-                        );
-                    }
-
-                    resolve();
-                }, FLIP_TEAMS_BUFFER_DURATION_MS);
-            });
+        public static getUnitForPlayerId(playerId: number): Unit {
+            return Unit._SOLDIERS_UNIT_MAP.get(playerId)!;
         }
 
-        public static switchUnit(player: mod.Player, unit: Unit): void {
+        public static flipTeams(teamId1: number, teamId2: number): void {
+            const unit1 = Unit.getUnitByTeamId(teamId1);
+            const unit2 = Unit.getUnitByTeamId(teamId2);
+
+            if (!unit1) {
+                logger.log(`<U> Unit not found for team ${teamId1}`, LogLevel.Error);
+                return;
+            }
+
+            if (!unit2) {
+                logger.log(`<U> Unit not found for team ${teamId2}`, LogLevel.Error);
+                return;
+            }
+
+            if (logger.willLog(LogLevel.Info)) {
+                logger.log(
+                    `<U> Flipping teams ${unit1.name} (${teamId1}) and ${unit2.name} (${teamId2})...`,
+                    LogLevel.Info
+                );
+            }
+
+            mod.SwitchTeams(unit1._team, unit2._team);
+
+            unit1._team = mod.GetTeam((unit1._teamId = teamId2));
+            unit2._team = mod.GetTeam((unit2._teamId = teamId1));
+
+            Unit._UNITS.set(teamId2, unit1);
+            Unit._UNITS.set(teamId1, unit2);
+
+            if (logger.willLog(LogLevel.Info)) {
+                logger.log(
+                    `<U> Teams ${unit1.name} (${teamId1}) and ${unit2.name} (${teamId2}) flipped`,
+                    LogLevel.Info
+                );
+            }
+        }
+
+        public static switchUnit(soldier: Soldier, unit: Unit): void {
             // TODO: Somehow make sure the unit size is not exceeded.
-            const soldier = Soldier.getSoldier(player);
+            const currentUnit = Unit._SOLDIERS_UNIT_MAP.get(soldier.playerId);
 
-            if (!soldier) return;
+            if (!currentUnit) {
+                logger.log(`<U> Unit not found for P-${soldier.playerId}`, LogLevel.Error);
+                return;
+            }
 
-            // TODO: Logging
-
-            const currentUnit = soldier.unit;
+            logger.log(
+                `<U> Switching unit for P-${soldier.playerId} from ${currentUnit.name} to ${unit.name}`,
+                LogLevel.Info
+            );
 
             // TODO: Need to undeploy the player first, and also ensure it can only happen at appropriate times.
 
-            mod.SetTeam(player, unit.team);
+            mod.SetTeam(soldier.player, unit.team);
+
             currentUnit._SOLDIERS.delete(soldier);
             unit._SOLDIERS.add(soldier);
+            Unit._SOLDIERS_UNIT_MAP.set(soldier.playerId, unit);
         }
 
         static {
@@ -595,7 +647,7 @@ export namespace SearchAndDestroy {
                 }
 
                 const teamId = mod.GetObjId(mod.GetTeam(player));
-                const unit = Unit.getUnit(teamId);
+                const unit = Unit.getUnitByTeamId(teamId);
 
                 if (!unit) {
                     logger.log(`<U> Unit not found for team ${teamId}`, LogLevel.Error);
@@ -606,9 +658,12 @@ export namespace SearchAndDestroy {
                     onStateChange: (state) => unit._handleSoldierStateChange(soldier, state),
                 };
 
-                const soldier = new Soldier(player, unit, callbacks, SKIP_MAN_DOWN);
+                const soldier = new Soldier(player, callbacks, SKIP_MAN_DOWN);
 
                 unit._SOLDIERS.add(soldier);
+                Unit._SOLDIERS_UNIT_MAP.set(soldier.playerId, unit);
+
+                unit._handleSoldierStateChange(soldier, soldier.state);
             });
         }
 
@@ -616,7 +671,7 @@ export namespace SearchAndDestroy {
             this._name = name;
             this._teamId = teamId;
             this._team = mod.GetTeam(teamId);
-            this._onSoldierEliminated = callbacks?.onSoldierEliminated;
+            this._onSoldierStateChange = callbacks?.onSoldierStateChange;
 
             Unit._UNITS.set(teamId, this);
         }
@@ -626,15 +681,14 @@ export namespace SearchAndDestroy {
         private _name: string;
         private _team: mod.Team;
         private _teamId: number;
-        private _onSoldierEliminated?: () => void;
+        private _onSoldierStateChange?: (soldier: Soldier) => void;
 
         private _handleSoldierStateChange(soldier: Soldier, state: Soldier.State): void {
             if (state === Soldier.State.Left) {
                 this._SOLDIERS.delete(soldier);
-                this._onSoldierEliminated?.();
-            } else if (state === Soldier.State.Undeployed) {
-                this._onSoldierEliminated?.();
             }
+
+            this._onSoldierStateChange?.(soldier);
         }
 
         public get name(): string {
@@ -662,7 +716,7 @@ export namespace SearchAndDestroy {
 
     namespace Unit {
         export type Callbacks = {
-            onSoldierEliminated?: () => Promise<void> | void;
+            onSoldierStateChange?: (soldier: Soldier) => Promise<void> | void;
         };
     }
 
@@ -694,19 +748,22 @@ export namespace SearchAndDestroy {
                 soldier._handleDeployed();
             });
 
-            Events.OnPlayerUndeploy.subscribe((player: mod.Player) => {
-                const playerId = mod.GetObjId(player);
+            Events.subscribe(
+                SKIP_MAN_DOWN ? Events.Type.OnPlayerDied : Events.Type.OnPlayerUndeploy,
+                (player: mod.Player) => {
+                    const playerId = mod.GetObjId(player);
 
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<S> P-${playerId} undeployed`, LogLevel.Info);
+                    if (logger.willLog(LogLevel.Info)) {
+                        logger.log(`<S> P-${playerId} eliminated`, LogLevel.Info);
+                    }
+
+                    const soldier = Soldier._SOLDIERS.get(playerId);
+
+                    if (!soldier) return;
+
+                    soldier._handleEliminated();
                 }
-
-                const soldier = Soldier._SOLDIERS.get(playerId);
-
-                if (!soldier) return;
-
-                soldier._handleUndeploy();
-            });
+            );
 
             Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
                 if (logger.willLog(LogLevel.Info)) {
@@ -723,10 +780,9 @@ export namespace SearchAndDestroy {
             });
         }
 
-        public constructor(player: mod.Player, unit: Unit, callbacks: Soldier.Callbacks, skipManDown: boolean = false) {
+        public constructor(player: mod.Player, callbacks: Soldier.Callbacks, skipManDown: boolean = false) {
             this._player = player;
             this._playerId = mod.GetObjId(player);
-            this._unit = unit;
 
             this._onStateChange = callbacks?.onStateChange;
 
@@ -734,12 +790,11 @@ export namespace SearchAndDestroy {
 
             Soldier._SOLDIERS.set(this._playerId, this);
 
-            logger.log(`<S> Soldier-${this._playerId} created for ${this._unit.name}`, LogLevel.Info);
+            logger.log(`<S> Soldier-${this._playerId} created`, LogLevel.Info);
         }
 
         private _player: mod.Player;
         private _playerId: number;
-        private _unit: Unit;
         private _state: Soldier.State = Soldier.State.Joined;
         private _onStateChange?: (state: Soldier.State) => void;
 
@@ -748,7 +803,7 @@ export namespace SearchAndDestroy {
             this._onStateChange?.(this._state);
         }
 
-        private _handleUndeploy(): void {
+        private _handleEliminated(): void {
             this._state = Soldier.State.Undeployed;
             this._onStateChange?.(this._state);
         }
@@ -767,7 +822,7 @@ export namespace SearchAndDestroy {
         }
 
         public get unit(): Unit {
-            return this._unit;
+            return Unit.getUnitForPlayerId(this.playerId);
         }
 
         public set state(state: Soldier.State) {
@@ -799,6 +854,8 @@ export namespace SearchAndDestroy {
         public static readonly DEFAULT_DEFUSE_DURATION = 10; // 10 seconds
 
         private static readonly _OBJECTIVES = new Map<number, Objective>();
+
+        private static readonly _OBJECTIVE_ONGOING_IDS = new Set<number>();
 
         static {
             Events.OnMCOMArmed.subscribe((mcom: mod.MCOM) => {
@@ -1021,16 +1078,47 @@ export namespace SearchAndDestroy {
         objectiveFuseDuration?: number;
     };
 
-    const handleSoldierEliminated = (unit: Unit): void => {
-        const currentRound = getCurrentRound();
+    const handleSoldierStateChange = (unit: Unit, soldier: Soldier): void => {
+        if (soldier.state === Soldier.State.Joined) {
+            setGameState((s) => {
+                s.playerMap[soldier.playerId] = unit.name;
+            });
 
-        if (!currentRound) return;
+            return Round.handleSoldierJoined(soldier);
+        }
 
-        currentRound.handleSoldierEliminated(unit);
+        if (soldier.state === Soldier.State.Left) {
+            setGameState((s) => {
+                s.playerMap[soldier.playerId] = undefined; // TODO: replace with `delete` when new version of SolidUI is released.
+            });
+        }
+
+        if (soldier.state === Soldier.State.Left || soldier.state === Soldier.State.Undeployed) {
+            Round.currentRound?.handleSoldierEliminated(soldier);
+        }
+
+        setGameState((s) => {
+            s.activePlayers[unit.name] = unit.activeSoldiers.length;
+        });
     };
 
-    const ALPHA_UNIT = new Unit('Alpha', 1, { onSoldierEliminated: (): void => handleSoldierEliminated(ALPHA_UNIT) });
-    const BRAVO_UNIT = new Unit('Bravo', 2, { onSoldierEliminated: (): void => handleSoldierEliminated(BRAVO_UNIT) });
+    const ALPHA_UNIT = new Unit('Alpha', 1, {
+        onSoldierStateChange: (soldier: Soldier): void => handleSoldierStateChange(ALPHA_UNIT, soldier),
+    });
+
+    const BRAVO_UNIT = new Unit('Bravo', 2, {
+        onSoldierStateChange: (soldier: Soldier): void => handleSoldierStateChange(BRAVO_UNIT, soldier),
+    });
+
+    const gameOptions: Options = {
+        allowSwitchTeams: ALLOW_SWITCH_TEAMS,
+        roundObjectives: [],
+        delayDuration: ROUND_DELAY_DURATION,
+        roundDuration: ROUNDS_DURATION,
+        objectiveArmDuration: OBJECTIVE_ARM_DURATION,
+        objectiveDefuseDuration: OBJECTIVE_DEFUSE_DURATION,
+        objectiveFuseDuration: OBJECTIVE_FUSE_DURATION,
+    };
 
     type GameState = {
         gameStarted: boolean;
@@ -1038,20 +1126,16 @@ export namespace SearchAndDestroy {
         roundDeploymentReleased: boolean;
         roundEnded: boolean;
         gameEnded: boolean;
+        resetting: boolean;
+        objectiveArmed: boolean;
+        winningTeamId?: number;
+        winCondition?: Round.WinCondition;
         clock: number;
-        rounds: Round[];
+        currentRoundId: number;
+        totalRounds: number;
         scores: Record<string, number>;
-    };
-
-    const gameOptions: Options = {
-        allowSwitchTeams: ALLOW_SWITCH_TEAMS,
-        roundObjectives: [],
-        delayDuration: ROUND_DELAY_DURATION,
-        roundDuration: ROUNDS_DURATION,
-        roundsToWin: ROUNDS_TO_WIN,
-        objectiveArmDuration: OBJECTIVE_ARM_DURATION,
-        objectiveDefuseDuration: OBJECTIVE_DEFUSE_DURATION,
-        objectiveFuseDuration: OBJECTIVE_FUSE_DURATION,
+        activePlayers: Record<string, number>;
+        playerMap: Record<number, string | undefined>;
     };
 
     const [gameState, setGameState] = SolidUI.createStore<GameState>({
@@ -1060,15 +1144,41 @@ export namespace SearchAndDestroy {
         roundDeploymentReleased: false,
         roundEnded: false,
         gameEnded: false,
+        resetting: false,
+        objectiveArmed: false,
+        winningTeamId: undefined,
+        winCondition: undefined,
         clock: 0,
-        rounds: [],
+        currentRoundId: 0,
+        totalRounds: 0,
         scores: {
             [ALPHA_UNIT.name]: 0,
             [BRAVO_UNIT.name]: 0,
         },
+        activePlayers: {
+            [ALPHA_UNIT.name]: 0,
+            [BRAVO_UNIT.name]: 0,
+        },
+        playerMap: {},
     });
 
     const deploymentManager = FORCE_DEPLOY ? new ForceDeploymentManager() : new SelfDeploymentManager();
+
+    const switchUnit = (player: mod.Player): void => {
+        const soldier = Soldier.getSoldier(player);
+
+        if (!soldier) return;
+
+        const unit = soldier.unit === ALPHA_UNIT ? BRAVO_UNIT : ALPHA_UNIT;
+
+        Unit.switchUnit(soldier, unit);
+
+        setGameState((s) => {
+            s.playerMap[soldier.playerId] = unit.name;
+            s.activePlayers[ALPHA_UNIT.name] = ALPHA_UNIT.activeSoldiers.length;
+            s.activePlayers[BRAVO_UNIT.name] = BRAVO_UNIT.activeSoldiers.length;
+        });
+    };
 
     // #endregion
 
@@ -1110,6 +1220,18 @@ export namespace SearchAndDestroy {
                 element.delete();
             }
 
+            for (const element of playerUI._roundDeploymentElements) {
+                element.delete();
+            }
+
+            for (const element of playerUI._roundEndInfoElements) {
+                element.delete();
+            }
+
+            for (const element of playerUI._gameEndElements) {
+                element.delete();
+            }
+
             PlayerUI._PLAYERS.delete(playerUI._playerId);
         }
 
@@ -1125,15 +1247,16 @@ export namespace SearchAndDestroy {
             this._player = player;
             this._playerId = mod.GetObjId(player);
 
-            if (gameState.rounds.length == 0) {
+            if (!gameState.currentRoundId) {
                 this._createGameStartUI();
             }
 
             this._createStartRoundInfoUI();
             this._createRoundDeploymentUI();
-            this._createRoundUI();
+            this._createScoreUI();
             this._createEndRoundInfoUI();
             this._createGameEndUI();
+            this._createResetUI();
 
             if (logger.willLog(LogLevel.Info)) {
                 logger.log(`<PUI> UI created for P-${this._playerId}`, LogLevel.Info);
@@ -1145,199 +1268,573 @@ export namespace SearchAndDestroy {
         private _gameStartElements: UI.Element[] = [];
         private _roundStartInfoElements: UI.Element[] = [];
         private _roundDeploymentElements: UI.Element[] = [];
-        private _roundElements: UI.Element[] = [];
+        private _scoreElements: UI.Element[] = [];
         private _roundEndInfoElements: UI.Element[] = [];
+        private _resetElements: UI.Element[] = [];
         private _gameEndElements: UI.Element[] = [];
 
         private _createGameStartUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                x: 0,
-                y: 100,
-                width: 400,
-                height: 100,
-                anchor: mod.UIAnchor.TopCenter,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.8,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.gameStarted && gameState.rounds.length == 0,
+            // NOTE: No ned to memo the messages in here as they will be deleted once the game starts.
+            const visible = SolidUI.createMemo(() => gameState.gameStarted && !gameState.currentRoundId);
+
+            const gameMode = SolidUI.h(UIText, {
+                x: 160,
+                y: 130,
+                width: 500,
+                height: 30,
+                anchor: mod.UIAnchor.TopLeft,
+                message: () => mod.Message(mod.stringkeys.searchAndDestroy.gameMode, gameState.totalRounds),
+                textSize: 30,
+                textAnchor: mod.UIAnchor.TopLeft,
+                textColor: UI.COLORS.BF_GREY_1,
+                bgFill: mod.UIBgFill.None,
+                visible,
                 receiver: this._player,
             });
 
-            SolidUI.h(UIText, {
-                parent: container,
-                width: 400,
+            this._gameStartElements.push(gameMode);
+
+            const side = SolidUI.h(UIText, {
+                x: 69,
+                y: 650,
+                width: 342,
+                height: 70,
+                anchor: mod.UIAnchor.BottomRight,
+                message: () =>
+                    gameState.playerMap[this._playerId] === ALPHA_UNIT.name
+                        ? mod.Message(mod.stringkeys.searchAndDestroy.alphaSide)
+                        : mod.Message(mod.stringkeys.searchAndDestroy.bravoSide),
+                textSize: 30,
+                textColor: UI.COLORS.WHITE,
+                bgFill: mod.UIBgFill.None,
+                visible,
+                receiver: this._player,
+            });
+
+            this._gameStartElements.push(side);
+
+            const switchTeamsButton = SolidUI.h(UITextButton, {
+                x: 69,
+                y: 550,
+                width: 342,
                 height: 100,
+                anchor: mod.UIAnchor.BottomRight,
+                message: () => mod.Message(mod.stringkeys.searchAndDestroy.switchTeams, gameState.clock),
                 textSize: 30,
                 textColor: UI.COLORS.WHITE,
                 bgColor: UI.COLORS.WHITE,
                 bgAlpha: 1,
                 bgFill: mod.UIBgFill.OutlineThin,
-                message: () => mod.Message(mod.stringkeys.searchAndDestroy.gameStartCountdown, gameState.clock),
+                enabled: true, // TODO: add condition to enable/disable button
+                uiInputModeWhenVisible: true,
+                visible,
+                onClick: () => switchUnit(this._player),
+                receiver: this._player,
             });
 
-            this._gameStartElements.push(container);
+            this._gameStartElements.push(switchTeamsButton);
         }
 
         private _createStartRoundInfoUI(): void {
+            const isAttacking = SolidUI.createMemo(() => {
+                if (!gameState.currentRoundId || !Round.currentRound) return false;
+
+                const unitName = gameState.playerMap[this._playerId];
+
+                if (!unitName) return false;
+
+                return Round.currentRound.attackingUnit.name === unitName;
+            });
+
             const container = SolidUI.h(UIContainer, {
-                x: 0,
-                y: 100,
-                width: 400,
-                height: 100,
-                anchor: mod.UIAnchor.TopCenter,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.8,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.gameStarted && gameState.rounds.length > 0 && !gameState.roundStarted,
+                width: 1000,
+                height: 550,
+                bgFill: mod.UIBgFill.None,
+                visible: SolidUI.createMemo(
+                    () => gameState.gameStarted && gameState.currentRoundId > 0 && !gameState.roundStarted
+                ),
                 receiver: this._player,
+            });
+
+            new UIContainer({
+                parent: container,
+                width: 500,
+                height: 300,
+                anchor: mod.UIAnchor.TopLeft,
+                bgColor: FRIENDLY_COLOR_DARK,
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientRight,
+            });
+
+            new UIContainer({
+                parent: container,
+                width: 500,
+                height: 300,
+                anchor: mod.UIAnchor.TopRight,
+                bgColor: FRIENDLY_COLOR_DARK,
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientLeft,
             });
 
             SolidUI.h(UIText, {
                 parent: container,
-                width: 400,
-                height: 100,
-                textSize: 30,
-                textColor: UI.COLORS.WHITE,
-                bgColor: UI.COLORS.WHITE,
-                bgAlpha: 1,
-                bgFill: mod.UIBgFill.OutlineThin,
+                y: 20,
+                width: 1000,
+                height: 160,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 160,
+                textColor: FRIENDLY_COLOR_BRIGHT,
+                bgFill: mod.UIBgFill.None,
+                message: () => mod.Message(mod.stringkeys.searchAndDestroy.round, gameState.currentRoundId),
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                y: 200,
+                width: 1000,
+                height: 80,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 80,
+                textColor: FRIENDLY_COLOR_BRIGHT,
+                bgFill: mod.UIBgFill.None,
                 message: () =>
                     mod.Message(
-                        mod.stringkeys.searchAndDestroy.roundStartCountdown,
-                        gameState.rounds.length,
-                        gameState.clock
+                        isAttacking()
+                            ? mod.stringkeys.searchAndDestroy.attacking
+                            : mod.stringkeys.searchAndDestroy.defending
                     ),
             });
 
-            this._roundStartInfoElements.push(container);
-        }
-
-        private _createRoundDeploymentUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                x: 0,
-                y: 100,
-                width: 400,
+            new UIContainer({
+                parent: container,
+                y: 350,
+                width: 500,
                 height: 100,
-                anchor: mod.UIAnchor.TopCenter,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.8,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.roundStarted && !gameState.roundDeploymentReleased,
-                receiver: this._player,
+                anchor: mod.UIAnchor.TopLeft,
+                bgColor: UI.COLORS.BF_GREY_3,
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientRight,
+            });
+
+            new UIContainer({
+                parent: container,
+                y: 350,
+                width: 500,
+                height: 100,
+                anchor: mod.UIAnchor.TopRight,
+                bgColor: UI.COLORS.BF_GREY_3,
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientLeft,
             });
 
             SolidUI.h(UIText, {
                 parent: container,
-                width: 400,
-                height: 100,
-                textSize: 30,
-                textColor: UI.COLORS.WHITE,
-                bgColor: UI.COLORS.WHITE,
-                bgAlpha: 1,
-                bgFill: mod.UIBgFill.OutlineThin,
-                message: () => mod.Message(mod.stringkeys.searchAndDestroy.roundDeploymentCountdown, gameState.clock),
-            });
-
-            this._roundDeploymentElements.push(container);
-        }
-
-        private _createRoundUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                x: 0,
-                y: 100,
-                width: 400,
-                height: 100,
+                y: 350,
+                width: 1000,
+                height: 50,
                 anchor: mod.UIAnchor.TopCenter,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.8,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.roundDeploymentReleased && !gameState.roundEnded,
-                receiver: this._player,
-            });
-
-            SolidUI.h(UIText, {
-                parent: container,
-                width: 400,
-                height: 100,
                 textSize: 30,
                 textColor: UI.COLORS.WHITE,
-                bgColor: UI.COLORS.WHITE,
-                bgAlpha: 1,
-                bgFill: mod.UIBgFill.OutlineThin,
+                bgFill: mod.UIBgFill.None,
                 message: () =>
                     mod.Message(
-                        mod.stringkeys.searchAndDestroy.roundEndCountdown,
-                        gameState.rounds.length,
-                        gameState.clock
+                        isAttacking()
+                            ? mod.stringkeys.searchAndDestroy.attackingDescription
+                            : mod.stringkeys.searchAndDestroy.defendingDescription
                     ),
             });
 
-            this._roundElements.push(container);
-        }
-
-        private _createEndRoundInfoUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                width: 2520,
-                height: 1080,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.95,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.roundEnded && !gameState.gameEnded,
-                receiver: this._player,
-            });
-
             SolidUI.h(UIText, {
                 parent: container,
-                width: 400,
-                height: 100,
+                y: 400,
+                width: 1000,
+                height: 50,
+                anchor: mod.UIAnchor.TopCenter,
                 textSize: 30,
                 textColor: UI.COLORS.WHITE,
-                bgColor: UI.COLORS.WHITE,
-                bgAlpha: 1,
-                bgFill: mod.UIBgFill.OutlineThin,
-                message: () => mod.Message(mod.stringkeys.searchAndDestroy.switchingSidesCountdown, gameState.clock),
+                bgFill: mod.UIBgFill.None,
+                message: () =>
+                    mod.Message(mod.stringkeys.searchAndDestroy.threshold, Math.ceil(gameState.totalRounds / 2)),
             });
 
             this._roundEndInfoElements.push(container);
         }
 
-        private _createGameEndUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                x: 0,
-                y: 100,
-                width: 400,
-                height: 100,
-                anchor: mod.UIAnchor.TopCenter,
-                bgColor: UI.COLORS.BF_GREY_4,
-                bgAlpha: 0.8,
-                bgFill: mod.UIBgFill.Blur,
-                visible: () => gameState.gameEnded,
-                receiver: this._player,
-            });
+        private _createRoundDeploymentUI(): void {
+            const visible = SolidUI.createMemo(() => gameState.roundStarted && !gameState.roundDeploymentReleased);
 
-            SolidUI.h(UIText, {
-                parent: container,
-                width: 400,
+            const countdown = SolidUI.h(UIText, {
+                x: 69,
+                y: 550,
+                width: 342,
                 height: 100,
+                anchor: mod.UIAnchor.BottomRight,
+                message: () =>
+                    mod.Message(
+                        mod.stringkeys.searchAndDestroy.roundDeploymentCountdown,
+                        visible() ? gameState.clock : 0
+                    ),
                 textSize: 30,
                 textColor: UI.COLORS.WHITE,
                 bgColor: UI.COLORS.WHITE,
                 bgAlpha: 1,
                 bgFill: mod.UIBgFill.OutlineThin,
-                message: () => mod.Message(mod.stringkeys.searchAndDestroy.gameEndCountdown, gameState.clock),
+                visible,
+                receiver: this._player,
+            });
+
+            this._roundDeploymentElements.push(countdown);
+        }
+
+        private _createTeamSquare(parent: UIContainer, unit: Unit): void {
+            const isOnLeft = SolidUI.createMemo(() => {
+                const unitName = gameState.playerMap[this._playerId];
+
+                if (!unitName) return false;
+
+                return unitName === unit.name;
+            });
+
+            const color = () => (isOnLeft() ? FRIENDLY_COLOR_BRIGHT : ENEMY_COLOR_BRIGHT);
+            const background = () => (isOnLeft() ? FRIENDLY_COLOR_BACKGROUND : ENEMY_COLOR_BACKGROUND);
+
+            const container = SolidUI.h(UIContainer, {
+                parent,
+                x: () => (isOnLeft() ? -25 : 25),
+                y: 34,
+                width: 46,
+                height: 70,
+                anchor: mod.UIAnchor.TopCenter,
+                bgColor: background,
+                bgAlpha: 0.85,
+                bgFill: mod.UIBgFill.Solid,
+            });
+
+            SolidUI.h(UIContainer, {
+                parent: container,
+                width: 46,
+                height: 70,
+                bgColor: color,
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.OutlineThin,
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                y: 8,
+                width: 46,
+                height: 30,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 24,
+                textColor: color,
+                bgFill: mod.UIBgFill.None,
+                message: () => mod.Message(gameState.scores[unit.name]),
+            });
+
+            SolidUI.h(UIImage, {
+                parent: container,
+                x: 8,
+                y: 8,
+                width: 10,
+                height: 18,
+                anchor: () => (isOnLeft() ? mod.UIAnchor.BottomLeft : mod.UIAnchor.BottomRight),
+                imageType: mod.UIImageType.CrownSolid,
+                imageColor: color,
+                bgFill: mod.UIBgFill.None,
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                x: 4,
+                y: 8,
+                width: 22,
+                height: 18,
+                anchor: () => (isOnLeft() ? mod.UIAnchor.BottomRight : mod.UIAnchor.BottomLeft),
+                textSize: 16,
+                textColor: color,
+                bgFill: mod.UIBgFill.None,
+                message: () => mod.Message(gameState.activePlayers[unit.name]),
+            });
+        }
+
+        private _createScoreUI(): void {
+            const container = SolidUI.h(UIContainer, {
+                y: 80,
+                width: 600,
+                height: 104,
+                anchor: mod.UIAnchor.TopCenter,
+                bgFill: mod.UIBgFill.None,
+                visible: SolidUI.createMemo(() => gameState.gameStarted && !gameState.gameEnded),
+                receiver: this._player,
+            });
+
+            const clockContainer = new UIContainer({
+                parent: container,
+                width: 96,
+                height: 30,
+                anchor: mod.UIAnchor.TopCenter,
+                bgColor: UI.COLORS.BF_GREY_4,
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.Solid,
+            });
+
+            const isObjectiveArmed = SolidUI.createMemo(() => !gameState.roundEnded && gameState.objectiveArmed);
+
+            SolidUI.h(UIText, {
+                parent: clockContainer,
+                width: 96,
+                height: 30,
+                textSize: 18,
+                textColor: () => (isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE),
+                bgColor: () => (isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE),
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.OutlineThin,
+                message: () => {
+                    const seconds = gameState.clock % 60;
+
+                    return mod.Message(
+                        mod.stringkeys.searchAndDestroy.clock,
+                        Math.floor(gameState.clock / 60),
+                        Math.floor(seconds / 10),
+                        seconds % 10
+                    );
+                },
+            });
+
+            this._createTeamSquare(container, ALPHA_UNIT);
+            this._createTeamSquare(container, BRAVO_UNIT);
+
+            this._scoreElements.push(container);
+        }
+
+        private _createEndRoundInfoUI(): void {
+            const visible = SolidUI.createMemo(
+                () => gameState.roundEnded && !gameState.gameEnded && gameState.winningTeamId !== undefined
+            );
+
+            const isWinner = SolidUI.createMemo(() => {
+                if (!visible()) return false;
+
+                const unitName = gameState.playerMap[this._playerId];
+
+                if (!unitName) return false;
+
+                // visible() ensures that gameState.winningTeamId is not undefined.
+                return Unit.getUnitByTeamId(gameState.winningTeamId!).name === unitName;
+            });
+
+            const container = SolidUI.h(UIContainer, {
+                width: 1920,
+                height: 500,
+                bgFill: mod.UIBgFill.None,
+                visible,
+                receiver: this._player,
+            });
+
+            SolidUI.h(UIContainer, {
+                parent: container,
+                width: 960,
+                height: 300,
+                anchor: mod.UIAnchor.TopLeft,
+                bgColor: () => (isWinner() ? FRIENDLY_COLOR_DARK : ENEMY_COLOR_DARK),
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientRight,
+            });
+
+            SolidUI.h(UIContainer, {
+                parent: container,
+                width: 960,
+                height: 300,
+                anchor: mod.UIAnchor.TopRight,
+                bgColor: () => (isWinner() ? FRIENDLY_COLOR_DARK : ENEMY_COLOR_DARK),
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientLeft,
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                width: 1920,
+                height: 300,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 240,
+                textColor: () => (isWinner() ? FRIENDLY_COLOR_BRIGHT : ENEMY_COLOR_BRIGHT),
+                bgFill: mod.UIBgFill.None,
+                message: () =>
+                    mod.Message(
+                        isWinner()
+                            ? mod.stringkeys.searchAndDestroy.roundWon
+                            : mod.stringkeys.searchAndDestroy.roundLost
+                    ),
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                y: 300,
+                width: 1920,
+                height: 100,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 40,
+                textColor: () => (isWinner() ? FRIENDLY_COLOR_BRIGHT : ENEMY_COLOR_BRIGHT),
+                bgFill: mod.UIBgFill.None,
+                message: () =>
+                    mod.Message(
+                        isWinner()
+                            ? mod.stringkeys.searchAndDestroy.winReasons[gameState.winCondition ?? 'enemiesEliminated']
+                            : mod.stringkeys.searchAndDestroy.loseReasons[gameState.winCondition ?? 'enemiesEliminated']
+                    ),
+            });
+
+            this._roundEndInfoElements.push(container);
+
+            const nextRoundCountdownVisible = SolidUI.createMemo(() => {
+                if (!visible()) return false;
+
+                // visible() ensures that gameState.winningTeamId is not undefined.
+                return (
+                    gameState.scores[Unit.getUnitByTeamId(gameState.winningTeamId!).name] <
+                    Math.ceil(gameState.totalRounds / 2)
+                );
+            });
+
+            const nextRoundCountdown = SolidUI.h(UIText, {
+                width: 2520,
+                height: 60,
+                anchor: mod.UIAnchor.BottomCenter,
+                textSize: 30,
+                textColor: UI.COLORS.WHITE,
+                bgColor: UI.COLORS.BF_GREY_4,
+                bgAlpha: 0.8,
+                bgFill: mod.UIBgFill.Blur,
+                visible: nextRoundCountdownVisible,
+                message: () =>
+                    mod.Message(
+                        mod.stringkeys.searchAndDestroy.nextRoundCountdown,
+                        gameState.currentRoundId,
+                        gameState.totalRounds,
+                        gameState.clock
+                    ),
+                receiver: this._player,
+            });
+
+            this._roundEndInfoElements.push(nextRoundCountdown);
+        }
+
+        private _createGameEndUI(): void {
+            const visible = SolidUI.createMemo(() => gameState.gameEnded && gameState.winningTeamId !== undefined);
+
+            const isWinner = SolidUI.createMemo(() => {
+                if (!visible()) return false;
+
+                const unitName = gameState.playerMap[this._playerId];
+
+                if (!unitName) return false;
+
+                // visible() ensures that gameState.winningTeamId is not undefined.
+                return Unit.getUnitByTeamId(gameState.winningTeamId!).name === unitName;
+            });
+
+            const container = SolidUI.h(UIContainer, {
+                width: 1920,
+                height: 500,
+                bgFill: mod.UIBgFill.None,
+                visible,
+                receiver: this._player,
+            });
+
+            SolidUI.h(UIContainer, {
+                parent: container,
+                width: 960,
+                height: 300,
+                anchor: mod.UIAnchor.TopLeft,
+                bgColor: () => (isWinner() ? FRIENDLY_COLOR_DARK : ENEMY_COLOR_DARK),
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientRight,
+            });
+
+            SolidUI.h(UIContainer, {
+                parent: container,
+                width: 960,
+                height: 300,
+                anchor: mod.UIAnchor.TopRight,
+                bgColor: () => (isWinner() ? FRIENDLY_COLOR_DARK : ENEMY_COLOR_DARK),
+                bgAlpha: 0.9,
+                bgFill: mod.UIBgFill.GradientLeft,
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                width: 1920,
+                height: 300,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 240,
+                textColor: () => (isWinner() ? FRIENDLY_COLOR_BRIGHT : ENEMY_COLOR_BRIGHT),
+                bgFill: mod.UIBgFill.None,
+                message: () =>
+                    mod.Message(
+                        isWinner() ? mod.stringkeys.searchAndDestroy.victory : mod.stringkeys.searchAndDestroy.defeat
+                    ),
+            });
+
+            SolidUI.h(UIText, {
+                parent: container,
+                y: 300,
+                width: 1920,
+                height: 100,
+                anchor: mod.UIAnchor.TopCenter,
+                textSize: 40,
+                textColor: () => (isWinner() ? FRIENDLY_COLOR_BRIGHT : ENEMY_COLOR_BRIGHT),
+                bgFill: mod.UIBgFill.None,
+                message: () => {
+                    // visible() ensures that gameState.winningTeamId is not undefined.
+                    const score = visible() ? gameState.scores[Unit.getUnitByTeamId(gameState.winningTeamId!).name] : 0;
+
+                    return mod.Message(
+                        isWinner()
+                            ? mod.stringkeys.searchAndDestroy.victoryReason
+                            : mod.stringkeys.searchAndDestroy.defeatReason,
+                        score
+                    );
+                },
             });
 
             this._gameEndElements.push(container);
+
+            const gameEndCountdown = SolidUI.h(UIText, {
+                width: 2520,
+                height: 60,
+                anchor: mod.UIAnchor.BottomCenter,
+                textSize: 30,
+                textColor: UI.COLORS.WHITE,
+                bgColor: UI.COLORS.BF_GREY_4,
+                bgAlpha: 0.8,
+                bgFill: mod.UIBgFill.Blur,
+                visible,
+                message: () =>
+                    mod.Message(mod.stringkeys.searchAndDestroy.gameEndCountdown, visible() ? gameState.clock : 0),
+                receiver: this._player,
+            });
+
+            this._gameEndElements.push(gameEndCountdown);
+        }
+
+        private _createResetUI(): void {
+            const container = SolidUI.h(UIContainer, {
+                width: 2520,
+                height: 1080,
+                bgColor: UI.COLORS.BLACK,
+                bgAlpha: 1,
+                bgFill: mod.UIBgFill.Solid,
+                visible: SolidUI.createMemo(() => gameState.resetting),
+                receiver: this._player,
+            });
+
+            this._resetElements.push(container);
         }
     }
 
     // #endregion
 
     // #region Game Functions
-
-    function getCurrentRound(): Round | undefined {
-        return gameState.rounds[gameState.rounds.length - 1];
-    }
 
     function updateClock(seconds: number): void {
         setGameState((s) => {
@@ -1353,22 +1850,28 @@ export namespace SearchAndDestroy {
             return;
         }
 
+        if (options.roundObjectives.length % 2 === 0) {
+            logger.log(`Only odd number of objectives are supported`, LogLevel.Warning);
+            return;
+        }
+
         gameOptions.allowSwitchTeams = options.allowSwitchTeams ?? ALLOW_SWITCH_TEAMS;
         gameOptions.roundObjectives = options.roundObjectives;
         gameOptions.delayDuration = options.delayDuration ?? ROUND_DELAY_DURATION;
         gameOptions.roundDuration = options.roundDuration ?? ROUNDS_DURATION;
-        gameOptions.roundsToWin = options.roundsToWin ?? ROUNDS_TO_WIN;
         gameOptions.objectiveArmDuration = options.objectiveArmDuration ?? OBJECTIVE_ARM_DURATION;
         gameOptions.objectiveDefuseDuration = options.objectiveDefuseDuration ?? OBJECTIVE_DEFUSE_DURATION;
         gameOptions.objectiveFuseDuration = options.objectiveFuseDuration ?? OBJECTIVE_FUSE_DURATION;
 
         setGameState((s) => {
             s.gameStarted = true;
+            s.totalRounds = gameOptions.roundObjectives.length;
         });
+
+        logger.log(`Game starting in ${GAME_START_INFO_DURATION}s...`, LogLevel.Info);
 
         const gameStartClock = new Clocks.CountDownClock(GAME_START_INFO_DURATION, {
             onComplete: () => {
-                logger.log(`gameStartClock onComplete`, LogLevel.Info);
                 PlayerUI.deleteGameStartUIs();
                 handleNewRound(ALPHA_UNIT, BRAVO_UNIT, gameOptions.roundObjectives.shift()!);
             },
@@ -1401,13 +1904,22 @@ export namespace SearchAndDestroy {
                     s.roundDeploymentReleased = true;
                 });
             },
+            onArmed: () => {
+                setGameState((s) => {
+                    s.objectiveArmed = true;
+                });
+            },
         });
 
         setGameState((s) => {
-            s.rounds = [...s.rounds, round];
             s.roundStarted = false;
             s.roundDeploymentReleased = false;
             s.roundEnded = false;
+            s.objectiveArmed = false;
+            s.winCondition = undefined;
+            s.winningTeamId = undefined;
+            s.currentRoundId = s.currentRoundId + 1;
+            s.resetting = false;
         });
 
         const roundStartInfoClock = new Clocks.CountDownClock(ROUND_START_INFO_DURATION, {
@@ -1425,15 +1937,19 @@ export namespace SearchAndDestroy {
     }
 
     function handleRoundEnd(round: Round): void {
-        const score = gameState.scores[round.winningUnit!.name] + 1;
+        const winningUnit = round.winningUnit!;
+
+        const score = gameState.scores[winningUnit.name] + 1;
 
         setGameState((s) => {
-            s.scores[round.winningUnit!.name] = score;
+            s.scores[winningUnit.name] = score;
             s.roundEnded = true;
+            s.winningTeamId = winningUnit.teamId;
+            s.winCondition = round.winCondition;
         });
 
         if (logger.willLog(LogLevel.Info)) {
-            logger.log(`${round.winningUnit!.name} score is now ${score}`, LogLevel.Info);
+            logger.log(`${winningUnit.name} score is now ${score}`, LogLevel.Info);
         }
 
         const roundEndInfoClock = new Clocks.CountDownClock(ROUND_END_INFO_DURATION, {
@@ -1442,16 +1958,22 @@ export namespace SearchAndDestroy {
                     logger.log(`Round ended`, LogLevel.Info);
                 }
 
-                if (score >= ROUNDS_TO_WIN) return handleGameEnd();
+                if (score >= Math.ceil(gameState.totalRounds / 2)) return handleGameEnd();
 
                 const objectivePositions = gameOptions.roundObjectives.shift();
 
                 if (!objectivePositions) return handleGameEnd();
 
-                Unit.flipTeams(ALPHA_UNIT.teamId, BRAVO_UNIT.teamId).then(() => {
+                setGameState((s) => {
+                    s.resetting = true;
+                });
+
+                Timers.setTimeout(() => {
+                    Unit.flipTeams(ALPHA_UNIT.teamId, BRAVO_UNIT.teamId);
+
                     // Start a new round with the previous defending unit attacking and the previous attacking unit defending.
                     handleNewRound(round.defendingUnit, round.attackingUnit, objectivePositions);
-                });
+                }, 1_000);
             },
             onSecond: updateClock,
         });
@@ -1472,6 +1994,8 @@ export namespace SearchAndDestroy {
 
         setGameState((s) => {
             s.gameEnded = true;
+            s.winningTeamId = winningUnit.teamId;
+            s.winCondition = undefined;
         });
 
         const gameEndClock = new Clocks.CountDownClock(GAME_END_INFO_DURATION, {

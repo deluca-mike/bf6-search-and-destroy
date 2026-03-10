@@ -1,7 +1,7 @@
 {
     "name": "bf6-search-and-destroy",
     "experienceName": "Search and Destroy",
-    "version": "0.0.58",
+    "version": "0.0.153",
     "type": "module",
     "description": "BF6 Portal Search and Destroy game mode",
     "engines": {

@@ -13,6 +13,8 @@ const roundObjectives: SearchAndDestroy.RoundObjectives[] = [
     [OBJECTIVE_1, OBJECTIVE_2],
     [OBJECTIVE_1, OBJECTIVE_2],
     [OBJECTIVE_1, OBJECTIVE_2],
+    [OBJECTIVE_1, OBJECTIVE_2],
+    [OBJECTIVE_1, OBJECTIVE_2],
 ];
 
 let adminDebugTool: DebugTool | undefined;
@@ -23,10 +25,10 @@ function createAdminDebugTool(player: mod.Player): void {
 
     const debugToolOptions: DebugTool.Options = {
         staticLogger: {
-            visible: true,
+            visible: false,
         },
         dynamicLogger: {
-            visible: true,
+            visible: false,
             width: 700,
             height: 800,
         },
@@ -39,51 +41,6 @@ function createAdminDebugTool(player: mod.Player): void {
 
     new MultiClickDetector(player, () => {
         adminDebugTool?.showDebugMenu();
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.deployAll), () => {
-        adminDebugTool?.dynamicLog(`Deploying all players`);
-        mod.DeployAllPlayers();
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.undeployAll), () => {
-        adminDebugTool?.dynamicLog(`Undeploying all players`);
-        mod.UndeployAllPlayers();
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.deployPlayer), () => {
-        adminDebugTool?.dynamicLog(`Deploying player`);
-        mod.DeployPlayer(player);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.undeployPlayer), () => {
-        adminDebugTool?.dynamicLog(`Undeploying player`);
-        mod.UndeployPlayer(player);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.enableAllDeploy), () => {
-        adminDebugTool?.dynamicLog(`Enabling all player deploy`);
-        mod.EnableAllPlayerDeploy(true);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.disableAllDeploy), () => {
-        adminDebugTool?.dynamicLog(`Disabling all player deploy`);
-        mod.EnableAllPlayerDeploy(false);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.enablePlayerDeploy), () => {
-        adminDebugTool?.dynamicLog(`Enabling player deploy`);
-        mod.EnablePlayerDeploy(player, true);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.disablePlayerDeploy), () => {
-        adminDebugTool?.dynamicLog(`Disabling player deploy`);
-        mod.EnablePlayerDeploy(player, false);
-    });
-
-    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.switchTeams), () => {
-        adminDebugTool?.dynamicLog(`Switching teams`);
-        mod.SwitchTeams(mod.GetTeam(1), mod.GetTeam(2));
     });
 
     adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.toggleTeam), () => {
