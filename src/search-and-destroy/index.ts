@@ -29,17 +29,8 @@ export namespace SearchAndDestroy {
 
     // #region DeploymentManagers
 
-    // TODO: Can probably combine most of the logic of ForceDeploymentManager and SelfDeploymentManager into a single class.
     abstract class DeploymentManager {
         public constructor() {
-            Events.OnPlayerJoinGame.subscribe((player: mod.Player) => {
-                if (logger.willLog(LogLevel.Debug)) {
-                    logger.log(`<DM> P-${mod.GetObjId(player)} joined`, LogLevel.Debug);
-                }
-
-                this._handleJoined(player);
-            });
-
             Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
                 if (logger.willLog(LogLevel.Debug)) {
                     logger.log(`<DM> P-${mod.GetObjId(player)} deployed`, LogLevel.Debug);
@@ -47,47 +38,49 @@ export namespace SearchAndDestroy {
 
                 this._handleDeployed(player);
             });
-
-            Events.OnPlayerUndeploy.subscribe((player: mod.Player) => {
-                if (logger.willLog(LogLevel.Debug)) {
-                    logger.log(`<DM> P-${mod.GetObjId(player)} undeployed`, LogLevel.Debug);
-                }
-
-                this._handleUndeploy(player);
-            });
         }
 
-        protected abstract _handleJoined(player: mod.Player): void;
-
-        protected abstract _handleDeployed(player: mod.Player): void;
-
-        protected abstract _handleUndeploy(player: mod.Player): void;
-
-        public abstract get deployEnabled(): boolean;
-
-        public abstract release(timeUntilRelease?: number, timeUntilLock?: number): void;
-
-        public abstract lock(timeUntilLock?: number, timeUntilRelease?: number): void;
-    }
-
-    class ForceDeploymentManager extends DeploymentManager {
+        private _players: Map<number, mod.Player> = new Map();
         private _timeout?: number;
         private _deployEnabled: boolean = false;
+
+        private _setAllPlayersDeployEnabled(deployEnabled: boolean): void {
+            for (const player of this._players.values()) {
+                mod.EnablePlayerDeploy(player, deployEnabled);
+            }
+        }
+
+        private _handleJoined(player: mod.Player): void {
+            mod.SetRedeployTime(player, 0);
+            mod.EnablePlayerDeploy(player, this._deployEnabled);
+        }
+
+        private _handleDeployed(player: mod.Player): void {
+            mod.EnablePlayerDeploy(player, false);
+        }
+
+        protected abstract _afterDeployEnabled(): void;
 
         public get deployEnabled(): boolean {
             return this._deployEnabled;
         }
 
-        protected _handleJoined(player: mod.Player): void {
-            mod.SetRedeployTime(player, 0);
-            mod.EnablePlayerDeploy(player, this._deployEnabled);
+        public handlePlayerJoinGame(player: mod.Player): void {
+            if (logger.willLog(LogLevel.Debug)) {
+                logger.log(
+                    `<DM> P-${mod.GetObjId(player)} joined on T-${mod.GetObjId(mod.GetTeam(player))}`,
+                    LogLevel.Debug
+                );
+            }
+
+            this._players.set(mod.GetObjId(player), player);
+
+            this._handleJoined(player);
         }
 
-        protected _handleDeployed(player: mod.Player): void {
-            mod.EnablePlayerDeploy(player, false);
+        public handlePlayerLeaveGame(playerId: number): void {
+            this._players.delete(playerId);
         }
-
-        protected _handleUndeploy(player: mod.Player): void {}
 
         public release(timeUntilRelease: number = 0, timeUntilLock?: number): void {
             Timers.clear(this._timeout);
@@ -97,8 +90,8 @@ export namespace SearchAndDestroy {
             }
 
             this._timeout = Timers.setTimeout(() => {
-                mod.EnableAllPlayerDeploy((this._deployEnabled = true));
-                mod.DeployAllPlayers();
+                this._setAllPlayersDeployEnabled((this._deployEnabled = true));
+                this._afterDeployEnabled();
 
                 if (logger.willLog(LogLevel.Info)) {
                     logger.log(`<FDM> Players deployed`, LogLevel.Info);
@@ -112,7 +105,7 @@ export namespace SearchAndDestroy {
 
                 this._timeout = Timers.setTimeout(
                     () => {
-                        mod.EnableAllPlayerDeploy((this._deployEnabled = false));
+                        this._setAllPlayersDeployEnabled((this._deployEnabled = false));
 
                         if (logger.willLog(LogLevel.Info)) {
                             logger.log(`<FDM> Deployment disabled`, LogLevel.Info);
@@ -131,7 +124,7 @@ export namespace SearchAndDestroy {
             }
 
             this._timeout = Timers.setTimeout(() => {
-                mod.EnableAllPlayerDeploy((this._deployEnabled = false));
+                this._setAllPlayersDeployEnabled((this._deployEnabled = false));
 
                 if (logger.willLog(LogLevel.Info)) {
                     logger.log(`<FDM> Deployment disabled`, LogLevel.Info);
@@ -144,8 +137,8 @@ export namespace SearchAndDestroy {
                 }
 
                 this._timeout = Timers.setTimeout(() => {
-                    mod.EnableAllPlayerDeploy((this._deployEnabled = true));
-                    mod.DeployAllPlayers();
+                    this._setAllPlayersDeployEnabled((this._deployEnabled = true));
+                    this._afterDeployEnabled();
 
                     if (logger.willLog(LogLevel.Info)) {
                         logger.log(`<FDM> Players deployed`, LogLevel.Info);
@@ -155,87 +148,14 @@ export namespace SearchAndDestroy {
         }
     }
 
+    class ForceDeploymentManager extends DeploymentManager {
+        protected _afterDeployEnabled(): void {
+            mod.DeployAllPlayers();
+        }
+    }
+
     class SelfDeploymentManager extends DeploymentManager {
-        private _timeout?: number;
-        private _deployEnabled: boolean = false;
-
-        public get deployEnabled(): boolean {
-            return this._deployEnabled;
-        }
-
-        protected _handleJoined(player: mod.Player): void {
-            mod.SetRedeployTime(player, 0);
-            mod.EnablePlayerDeploy(player, this._deployEnabled);
-        }
-
-        protected _handleDeployed(player: mod.Player): void {
-            mod.EnablePlayerDeploy(player, false);
-        }
-
-        protected _handleUndeploy(player: mod.Player): void {}
-
-        public release(timeUntilRelease: number = 0, timeUntilLock?: number): void {
-            Timers.clear(this._timeout);
-
-            if (logger.willLog(LogLevel.Info)) {
-                logger.log(`<SDM> Enabling deployment in ${timeUntilRelease / 1_000}s...`, LogLevel.Info);
-            }
-
-            this._timeout = Timers.setTimeout(() => {
-                mod.EnableAllPlayerDeploy((this._deployEnabled = true));
-
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<SDM> Deployment enabled`, LogLevel.Info);
-                }
-
-                if (timeUntilLock === undefined) return;
-
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<SDM> Disabling deployment in ${timeUntilLock / 1_000}s...`, LogLevel.Info);
-                }
-
-                this._timeout = Timers.setTimeout(
-                    () => {
-                        mod.EnableAllPlayerDeploy((this._deployEnabled = false));
-
-                        if (logger.willLog(LogLevel.Info)) {
-                            logger.log(`<SDM> Deployment disabled`, LogLevel.Info);
-                        }
-                    },
-                    timeUntilLock > 1 ? timeUntilLock : 1
-                );
-            }, timeUntilRelease);
-        }
-
-        public lock(timeUntilLock: number = 0, timeUntilRelease?: number): void {
-            Timers.clear(this._timeout);
-
-            if (logger.willLog(LogLevel.Info)) {
-                logger.log(`<SDM> Disabling deployment in ${timeUntilLock / 1_000}s...`, LogLevel.Info);
-            }
-
-            this._timeout = Timers.setTimeout(() => {
-                mod.EnableAllPlayerDeploy((this._deployEnabled = false));
-
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<SDM> Deployment enabled`, LogLevel.Info);
-                }
-
-                if (timeUntilRelease === undefined) return;
-
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<SDM> Enabling deployment in ${timeUntilRelease / 1_000}s...`, LogLevel.Info);
-                }
-
-                this._timeout = Timers.setTimeout(() => {
-                    mod.EnableAllPlayerDeploy((this._deployEnabled = true));
-
-                    if (logger.willLog(LogLevel.Info)) {
-                        logger.log(`<SDM> Deployment enabled`, LogLevel.Info);
-                    }
-                }, timeUntilRelease);
-            }, timeUntilLock);
-        }
+        protected _afterDeployEnabled(): void {}
     }
 
     // #endregion
@@ -245,18 +165,19 @@ export namespace SearchAndDestroy {
     const FORCE_DEPLOY = true;
     const ALLOW_SWITCH_TEAMS = true; // true for no revives.
     const SKIP_MAN_DOWN = true;
-    const ROUND_DELAY_DURATION = 5;
+    const ROUND_DELAY_DURATION = 20;
     const ROUNDS_DURATION = 360;
     const OBJECTIVE_FUSE_DURATION = 60;
     const OBJECTIVE_ARM_DURATION = 7;
     const OBJECTIVE_DEFUSE_DURATION = 10;
     const GAME_START_INFO_DURATION = 30;
-    const ROUND_START_INFO_DURATION = 5;
+    const ROUND_START_INFO_DURATION = 10;
     const ROUND_END_TEARDOWN_DELAY_DURATION = 5;
     const ROUND_END_INFO_DURATION = 10;
     const GAME_END_INFO_DURATION = 10;
+    const MAX_PLAYERS_PER_UNIT = 8;
 
-    // const GREEN = mod.CreateVector(0.49, 0.81, 0.41); // #7DCE68
+    const GREEN = mod.CreateVector(0.49, 0.81, 0.41); // #7DCE68
 
     const FRIENDLY_COLOR_BRIGHT = mod.CreateVector(0.471, 0.949, 1.0); // #78F2FF
     const FRIENDLY_COLOR_BACKGROUND = mod.CreateVector(0.471 / 2.5, 0.949 / 2.5, 1.0 / 2.5);
@@ -572,6 +493,42 @@ export namespace SearchAndDestroy {
 
         private static readonly _SOLDIERS_UNIT_MAP = new Map<number, Unit>();
 
+        /**
+         * Since `mod.SwitchTeams` is broken for anything other that switch team 0 with team 1, we first need to move
+         * one player from `unit1` to team 0, then move one of each player from `unit2` and `unit1` to the other team,
+         * and then move the first player from team 0 to `unit2`.
+         */
+        private static async _switchSides(unit1: Unit, unit2: Unit): Promise<void> {
+            return new Promise((resolve) => {
+                const soldiersOfUnit1 = Array.from(unit1._SOLDIERS);
+                const soldiersOfUnit2 = Array.from(unit2._SOLDIERS);
+
+                for (let i = 0; i < MAX_PLAYERS_PER_UNIT; ++i) {
+                    const soldierOfUnit1 = soldiersOfUnit1[i];
+
+                    if (soldierOfUnit1) {
+                        mod.SetTeam(soldierOfUnit1.player, i === 0 ? mod.GetTeam(0) : unit2.team);
+                    }
+
+                    const soldierOfUnit2 = soldiersOfUnit2[i];
+
+                    if (soldierOfUnit2) {
+                        mod.SetTeam(soldierOfUnit2.player, unit1.team);
+                    }
+                }
+
+                const firstSoldierOfUnit1 = soldiersOfUnit1[0];
+
+                Timers.setTimeout(() => {
+                    if (firstSoldierOfUnit1) {
+                        mod.SetTeam(firstSoldierOfUnit1.player, unit2.team);
+                    }
+
+                    Timers.setTimeout(resolve, 1_000);
+                }, 1_000);
+            });
+        }
+
         public static getUnitByTeamId(teamId: number): Unit {
             return Unit._UNITS.get(teamId)!;
         }
@@ -580,7 +537,7 @@ export namespace SearchAndDestroy {
             return Unit._SOLDIERS_UNIT_MAP.get(playerId)!;
         }
 
-        public static flipTeams(teamId1: number, teamId2: number): void {
+        public static async flipTeams(teamId1: number, teamId2: number): Promise<void> {
             const unit1 = Unit.getUnitByTeamId(teamId1);
             const unit2 = Unit.getUnitByTeamId(teamId2);
 
@@ -601,7 +558,7 @@ export namespace SearchAndDestroy {
                 );
             }
 
-            mod.SwitchTeams(unit1._team, unit2._team);
+            await Unit._switchSides(unit1, unit2);
 
             unit1._team = mod.GetTeam((unit1._teamId = teamId2));
             unit2._team = mod.GetTeam((unit2._teamId = teamId1));
@@ -645,31 +602,30 @@ export namespace SearchAndDestroy {
             return true;
         }
 
-        static {
-            Events.OnPlayerJoinGame.subscribe((player: mod.Player) => {
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<U> P-${mod.GetObjId(player)} joined game`, LogLevel.Info);
-                }
+        public static handlePlayerJoinGame(player: mod.Player): void {
+            const teamId = mod.GetObjId(mod.GetTeam(player));
 
-                const teamId = mod.GetObjId(mod.GetTeam(player));
-                const unit = Unit.getUnitByTeamId(teamId);
+            if (logger.willLog(LogLevel.Debug)) {
+                logger.log(`<U> P-${mod.GetObjId(player)} joined game on T-${teamId}`, LogLevel.Debug);
+            }
 
-                if (!unit) {
-                    logger.log(`<U> Unit not found for team ${teamId}`, LogLevel.Error);
-                    return;
-                }
+            const unit = Unit.getUnitByTeamId(teamId);
 
-                const callbacks: Soldier.Callbacks = {
-                    onStateChange: (state) => unit._handleSoldierStateChange(soldier, state),
-                };
+            if (!unit) {
+                logger.log(`<U> Unit not found for team ${teamId}`, LogLevel.Error);
+                return;
+            }
 
-                const soldier = new Soldier(player, callbacks, SKIP_MAN_DOWN);
+            const callbacks: Soldier.Callbacks = {
+                onStateChange: (state) => unit._handleSoldierStateChange(soldier, state),
+            };
 
-                unit._SOLDIERS.add(soldier);
-                Unit._SOLDIERS_UNIT_MAP.set(soldier.playerId, unit);
+            const soldier = new Soldier(player, callbacks, SKIP_MAN_DOWN);
 
-                unit._handleSoldierStateChange(soldier, soldier.state);
-            });
+            unit._SOLDIERS.add(soldier);
+            Unit._SOLDIERS_UNIT_MAP.set(soldier.playerId, unit);
+
+            unit._handleSoldierStateChange(soldier, soldier.state);
         }
 
         public constructor(name: string, teamId: number, callbacks: Unit.Callbacks) {
@@ -738,6 +694,20 @@ export namespace SearchAndDestroy {
             }
         }
 
+        public static handlePlayerLeaveGame(playerId: number): void {
+            if (logger.willLog(LogLevel.Info)) {
+                logger.log(`<S> P-${playerId} left game`, LogLevel.Info);
+            }
+
+            const soldier = Soldier._SOLDIERS.get(playerId);
+
+            if (!soldier) return;
+
+            Soldier._SOLDIERS.delete(playerId);
+
+            soldier._handleLeave();
+        }
+
         static {
             Events.OnPlayerDeployed.subscribe((player: mod.Player) => {
                 const playerId = mod.GetObjId(player);
@@ -769,20 +739,6 @@ export namespace SearchAndDestroy {
                     soldier._handleEliminated();
                 }
             );
-
-            Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<S> P-${playerId} left game`, LogLevel.Info);
-                }
-
-                const soldier = Soldier._SOLDIERS.get(playerId);
-
-                if (!soldier) return;
-
-                Soldier._SOLDIERS.delete(playerId);
-
-                soldier._handleLeave();
-            });
         }
 
         public constructor(player: mod.Player, callbacks: Soldier.Callbacks, skipManDown: boolean = false) {
@@ -1077,7 +1033,6 @@ export namespace SearchAndDestroy {
         allowSwitchTeams?: boolean;
         delayDuration?: number;
         roundDuration?: number;
-        roundsToWin?: number;
         objectiveArmDuration?: number;
         objectiveDefuseDuration?: number;
         objectiveFuseDuration?: number;
@@ -1100,6 +1055,10 @@ export namespace SearchAndDestroy {
 
         if (soldier.state === Soldier.State.Left || soldier.state === Soldier.State.Undeployed) {
             Round.currentRound?.handleSoldierEliminated(soldier);
+
+            if (unit.activeSoldiers.length === 2) {
+                playPlayerCountLowVoiceOvers(unit);
+            }
         }
 
         setGameState((s) => {
@@ -1192,24 +1151,24 @@ export namespace SearchAndDestroy {
     class PlayerUI {
         private static readonly _PLAYERS = new Map<number, PlayerUI>();
 
-        static {
-            Events.OnPlayerJoinGame.subscribe((player: mod.Player) => {
-                const playerId = mod.GetObjId(player);
+        public static handlePlayerJoinGame(player: mod.Player): void {
+            const playerId = mod.GetObjId(player);
 
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<PUI> P-${playerId} joined game`, LogLevel.Info);
-                }
+            if (logger.willLog(LogLevel.Debug)) {
+                logger.log(`<PUI> P-${playerId} joined game on T-${mod.GetObjId(mod.GetTeam(player))}`, LogLevel.Debug);
+            }
 
+            if (!mod.GetSoldierState(player, mod.SoldierStateBool.IsAISoldier)) {
                 PlayerUI._PLAYERS.set(playerId, new PlayerUI(player));
-            });
+            }
+        }
 
-            Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
-                if (logger.willLog(LogLevel.Info)) {
-                    logger.log(`<PUI> P-${playerId} left game`, LogLevel.Info);
-                }
+        public static handlePlayerLeaveGame(playerId: number): void {
+            if (logger.willLog(LogLevel.Info)) {
+                logger.log(`<PUI> P-${playerId} left game`, LogLevel.Info);
+            }
 
-                PlayerUI.delete(playerId);
-            });
+            PlayerUI.delete(playerId);
         }
 
         public static delete(playerId: number): void {
@@ -1261,7 +1220,6 @@ export namespace SearchAndDestroy {
             this._createScoreUI();
             this._createEndRoundInfoUI();
             this._createGameEndUI();
-            this._createResetUI();
 
             if (logger.willLog(LogLevel.Info)) {
                 logger.log(`<PUI> UI created for P-${this._playerId}`, LogLevel.Info);
@@ -1275,7 +1233,6 @@ export namespace SearchAndDestroy {
         private _roundDeploymentElements: UI.Element[] = [];
         private _scoreElements: UI.Element[] = [];
         private _roundEndInfoElements: UI.Element[] = [];
-        private _resetElements: UI.Element[] = [];
         private _gameEndElements: UI.Element[] = [];
 
         private _createGameStartUI(): void {
@@ -1591,6 +1548,7 @@ export namespace SearchAndDestroy {
                 bgFill: mod.UIBgFill.Solid,
             });
 
+            const isInDeploymentScreen = SolidUI.createMemo(() => !gameState.roundDeploymentReleased);
             const isObjectiveArmed = SolidUI.createMemo(() => !gameState.roundEnded && gameState.objectiveArmed);
 
             SolidUI.h(UIText, {
@@ -1598,8 +1556,10 @@ export namespace SearchAndDestroy {
                 width: 96,
                 height: 30,
                 textSize: 18,
-                textColor: () => (isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE),
-                bgColor: () => (isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE),
+                textColor: () =>
+                    isInDeploymentScreen() ? GREEN : isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE,
+                bgColor: () =>
+                    isInDeploymentScreen() ? GREEN : isObjectiveArmed() ? ENEMY_COLOR_BRIGHT : UI.COLORS.WHITE,
                 bgAlpha: 1,
                 bgFill: mod.UIBgFill.OutlineThin,
                 message: () => {
@@ -1622,7 +1582,11 @@ export namespace SearchAndDestroy {
 
         private _createEndRoundInfoUI(): void {
             const visible = SolidUI.createMemo(
-                () => gameState.roundEnded && !gameState.gameEnded && gameState.winningTeamId !== undefined
+                () =>
+                    gameState.roundEnded &&
+                    !gameState.gameEnded &&
+                    gameState.winningTeamId !== undefined &&
+                    !gameState.resetting
             );
 
             const isWinner = SolidUI.createMemo(() => {
@@ -1829,30 +1793,186 @@ export namespace SearchAndDestroy {
 
             this._gameEndElements.push(gameEndCountdown);
         }
+    }
 
-        private _createResetUI(): void {
-            const container = SolidUI.h(UIContainer, {
-                width: 2520,
-                height: 1080,
-                bgColor: UI.COLORS.BLACK,
-                bgAlpha: 1,
-                bgFill: mod.UIBgFill.Solid,
-                visible: SolidUI.createMemo(() => gameState.resetting),
-                receiver: this._player,
+    // #endregion
+
+    // #region Scoreboard
+
+    class Scoreboard {
+        private readonly _SCORES: Map<number, Scoreboard.Score> = new Map();
+
+        public constructor() {
+            mod.SetScoreboardType(mod.ScoreboardType.CustomTwoTeams);
+            mod.SetScoreboardColumnWidths(160, 160, 160);
+            mod.SetScoreboardColumnNames(
+                mod.Message(mod.stringkeys.searchAndDestroy.scoreboard.columns.kills),
+                mod.Message(mod.stringkeys.searchAndDestroy.scoreboard.columns.assists),
+                mod.Message(mod.stringkeys.searchAndDestroy.scoreboard.columns.deaths)
+            );
+
+            Events.OnPlayerEarnedKill.subscribe((killer: mod.Player, victim: mod.Player) => {
+                if (mod.Equals(killer, victim)) return;
+
+                const score = this._getScore(killer);
+
+                score.kills++;
+
+                mod.SetScoreboardPlayerValues(killer, score.kills, score.assists, score.deaths);
             });
 
-            this._resetElements.push(container);
+            Events.OnPlayerEarnedKillAssist.subscribe((assistingPlayer: mod.Player, victim: mod.Player) => {
+                if (mod.Equals(assistingPlayer, victim)) return;
+
+                const score = this._getScore(assistingPlayer);
+
+                score.assists++;
+
+                mod.SetScoreboardPlayerValues(assistingPlayer, score.kills, score.assists, score.deaths);
+            });
+
+            Events.OnPlayerDied.subscribe((player: mod.Player) => {
+                const score = this._getScore(player);
+
+                score.deaths++;
+
+                mod.SetScoreboardPlayerValues(player, score.kills, score.assists, score.deaths);
+            });
         }
+
+        private _getScore(player: mod.Player): Scoreboard.Score {
+            const playerId = mod.GetObjId(player);
+
+            if (!this._SCORES.has(playerId)) {
+                this._SCORES.set(playerId, { kills: 0, assists: 0, deaths: 0 });
+            }
+
+            return this._SCORES.get(playerId)!;
+        }
+    }
+
+    namespace Scoreboard {
+        export type Score = {
+            kills: number;
+            assists: number;
+            deaths: number;
+        };
     }
 
     // #endregion
 
     // #region Game Functions
 
+    const voiceOverModules: Record<string, mod.VO> = {};
+
+    function checkTimeLeftForVoiceOver(seconds: number, targetSeconds: number): boolean {
+        return (
+            seconds === targetSeconds && (!gameState.objectiveArmed || gameOptions.objectiveFuseDuration !== seconds)
+        );
+    }
+
+    function getVoiceOverTimeEvent(seconds: number): mod.VoiceOverEvents2D | undefined {
+        if (checkTimeLeftForVoiceOver(seconds, 120)) return mod.VoiceOverEvents2D.Time120Left;
+        if (checkTimeLeftForVoiceOver(seconds, 60)) return mod.VoiceOverEvents2D.Time60Left;
+        if (checkTimeLeftForVoiceOver(seconds, 30)) return mod.VoiceOverEvents2D.Time30Left;
+        return undefined;
+    }
+
+    function playVoiceOver(unit: Unit, voiceOverEvent: mod.VoiceOverEvents2D): void {
+        const voiceOverModule = voiceOverModules[unit.name];
+
+        if (!voiceOverModule) return;
+
+        mod.PlayVO(voiceOverModule, voiceOverEvent, mod.VoiceOverFlags.Alpha, unit.team);
+    }
+
+    function playVoiceOvers(voiceOverEvent?: mod.VoiceOverEvents2D): void {
+        if (!voiceOverEvent) return;
+
+        playVoiceOver(ALPHA_UNIT, voiceOverEvent);
+        playVoiceOver(BRAVO_UNIT, voiceOverEvent);
+    }
+
+    function playTimeLeftVoiceOvers(seconds: number): void {
+        if (!Round.currentRound) return;
+
+        if (seconds === 20) {
+            if (gameState.objectiveArmed) {
+                playVoiceOver(Round.currentRound?.defendingUnit, mod.VoiceOverEvents2D.TimeLow);
+            } else {
+                playVoiceOver(Round.currentRound?.attackingUnit, mod.VoiceOverEvents2D.TimeLow);
+            }
+
+            return;
+        }
+
+        playVoiceOvers(getVoiceOverTimeEvent(seconds));
+    }
+
+    function playRoundStartVoiceOvers(): void {
+        playVoiceOvers(mod.VoiceOverEvents2D.RoundStartGeneric);
+    }
+
+    function playSwitchSidesVoiceOvers(): void {
+        playVoiceOvers(mod.VoiceOverEvents2D.RoundSwitchSides);
+    }
+
+    function playLastRoundVoiceOvers(): void {
+        playVoiceOvers(mod.VoiceOverEvents2D.RoundLastRound);
+    }
+
+    function playGameEndVoiceOvers(): void {
+        if (!gameState.winningTeamId) return;
+
+        const winningUnit = gameState.winningTeamId === ALPHA_UNIT.teamId ? ALPHA_UNIT : BRAVO_UNIT;
+        const losingUnit = gameState.winningTeamId === ALPHA_UNIT.teamId ? BRAVO_UNIT : ALPHA_UNIT;
+
+        playVoiceOver(winningUnit, mod.VoiceOverEvents2D.GlobalEOMVictory);
+        playVoiceOver(losingUnit, mod.VoiceOverEvents2D.GlobalEOMDefeat);
+    }
+
+    function playPlayerCountLowVoiceOvers(unitWithLowPlayerCount: Unit): void {
+        const otherUnit = unitWithLowPlayerCount === ALPHA_UNIT ? BRAVO_UNIT : ALPHA_UNIT;
+        playVoiceOver(unitWithLowPlayerCount, mod.VoiceOverEvents2D.PlayerCountFriendlyLow);
+        playVoiceOver(otherUnit, mod.VoiceOverEvents2D.PlayerCountEnemyLow);
+    }
+
+    function playMCOMArmedVoiceOvers(): void {
+        const currentRound = Round.currentRound;
+
+        if (!currentRound) return;
+
+        playVoiceOver(currentRound.attackingUnit, mod.VoiceOverEvents2D.MComArmFriendly);
+        playVoiceOver(currentRound.defendingUnit, mod.VoiceOverEvents2D.MComArmEnemy);
+    }
+
+    function playRoundEndVoiceOvers(): void {
+        if (!gameState.winningTeamId || !gameState.winCondition) return;
+
+        const winningUnit = gameState.winningTeamId === ALPHA_UNIT.teamId ? ALPHA_UNIT : BRAVO_UNIT;
+        const losingUnit = gameState.winningTeamId === ALPHA_UNIT.teamId ? BRAVO_UNIT : ALPHA_UNIT;
+
+        if (gameState.winCondition === Round.WinCondition.EnemyEliminated) {
+            playVoiceOver(winningUnit, mod.VoiceOverEvents2D.RoundEndFriendlyKills);
+            playVoiceOver(losingUnit, mod.VoiceOverEvents2D.RoundEndEnemyKills);
+        } else if (gameState.winCondition === Round.WinCondition.ObjectiveDestroyed) {
+            playVoiceOver(winningUnit, mod.VoiceOverEvents2D.MComDestroyedFriendly);
+            playVoiceOver(losingUnit, mod.VoiceOverEvents2D.MComDestroyedEnemy);
+        } else if (gameState.winCondition === Round.WinCondition.ObjectiveDisarmed) {
+            playVoiceOver(winningUnit, mod.VoiceOverEvents2D.MComDefuseFriendly);
+            playVoiceOver(losingUnit, mod.VoiceOverEvents2D.MComDefuseEnemy);
+        } else if (gameState.winCondition === Round.WinCondition.ObjectivesDefended) {
+            playVoiceOver(winningUnit, mod.VoiceOverEvents2D.RoundEndFriendlyCapture);
+            playVoiceOver(losingUnit, mod.VoiceOverEvents2D.RoundEndEnemyCapture);
+        }
+    }
+
     function updateClock(seconds: number): void {
         setGameState((s) => {
             s.clock = seconds;
         });
+
+        playTimeLeftVoiceOvers(seconds);
     }
 
     export function start(options: Options): void {
@@ -1875,6 +1995,20 @@ export namespace SearchAndDestroy {
         gameOptions.objectiveArmDuration = options.objectiveArmDuration ?? OBJECTIVE_ARM_DURATION;
         gameOptions.objectiveDefuseDuration = options.objectiveDefuseDuration ?? OBJECTIVE_DEFUSE_DURATION;
         gameOptions.objectiveFuseDuration = options.objectiveFuseDuration ?? OBJECTIVE_FUSE_DURATION;
+
+        new Scoreboard();
+
+        voiceOverModules[ALPHA_UNIT.name] = mod.SpawnObject(
+            mod.RuntimeSpawn_Common.SFX_VOModule_OneShot2D,
+            mod.CreateVector(0, 0, 0),
+            mod.CreateVector(0, 0, 0)
+        ) as mod.VO;
+
+        voiceOverModules[BRAVO_UNIT.name] = mod.SpawnObject(
+            mod.RuntimeSpawn_Common.SFX_VOModule_OneShot2D,
+            mod.CreateVector(0, 0, 0),
+            mod.CreateVector(0, 0, 0)
+        ) as mod.VO;
 
         setGameState((s) => {
             s.gameStarted = true;
@@ -1916,11 +2050,19 @@ export namespace SearchAndDestroy {
                 setGameState((s) => {
                     s.roundDeploymentReleased = true;
                 });
+
+                if (gameState.currentRoundId === gameState.totalRounds) {
+                    playLastRoundVoiceOvers();
+                } else {
+                    playRoundStartVoiceOvers();
+                }
             },
             onArmed: () => {
                 setGameState((s) => {
                     s.objectiveArmed = true;
                 });
+
+                playMCOMArmedVoiceOvers();
             },
         });
 
@@ -1961,6 +2103,8 @@ export namespace SearchAndDestroy {
             s.winCondition = round.winCondition;
         });
 
+        playRoundEndVoiceOvers();
+
         if (logger.willLog(LogLevel.Info)) {
             logger.log(`${winningUnit.name} score is now ${score}`, LogLevel.Info);
         }
@@ -1981,8 +2125,10 @@ export namespace SearchAndDestroy {
                     s.resetting = true;
                 });
 
-                Timers.setTimeout(() => {
-                    Unit.flipTeams(ALPHA_UNIT.teamId, BRAVO_UNIT.teamId);
+                Timers.setTimeout(async () => {
+                    playSwitchSidesVoiceOvers();
+
+                    await Unit.flipTeams(ALPHA_UNIT.teamId, BRAVO_UNIT.teamId);
 
                     // Start a new round with the previous defending unit attacking and the previous attacking unit defending.
                     handleNewRound(round.defendingUnit, round.attackingUnit, objectivePositions);
@@ -2011,6 +2157,8 @@ export namespace SearchAndDestroy {
             s.winCondition = undefined;
         });
 
+        playGameEndVoiceOvers();
+
         const gameEndClock = new Clocks.CountDownClock(GAME_END_INFO_DURATION, {
             onComplete: () => {
                 if (logger.willLog(LogLevel.Info)) {
@@ -2024,6 +2172,90 @@ export namespace SearchAndDestroy {
 
         gameEndClock.start();
     }
+
+    // #endregion
+
+    // #region Join/Leave Event Handling
+
+    type Spectator = {
+        player: mod.Player;
+        playerId: number;
+    };
+
+    const spectators: Spectator[] = [];
+
+    function removeSpectator(playerId: number): boolean {
+        const index = spectators.findIndex((spectator) => spectator.playerId === playerId);
+
+        if (index === -1) return false;
+
+        spectators.splice(index, 1);
+        return true;
+    }
+
+    // If a player is not on team Alpha or Bravo, add them to the team with the fewest players, so long as that team has
+    // less than 8 players. If both teams are full, make them a spectator.
+    function placePlayer(player: mod.Player): boolean {
+        const playerId = mod.GetObjId(player);
+
+        const teamId = mod.GetObjId(mod.GetTeam(player));
+
+        // Player is already placed on team Alpha or Bravo.
+        if (teamId === ALPHA_UNIT.teamId || teamId === BRAVO_UNIT.teamId) return true;
+
+        const unitWithFewestSoldiers = ALPHA_UNIT.soldierCount < BRAVO_UNIT.soldierCount ? ALPHA_UNIT : BRAVO_UNIT;
+
+        if (unitWithFewestSoldiers.soldierCount < MAX_PLAYERS_PER_UNIT) {
+            logger.log(
+                `P-${playerId} joined on T-${teamId} and is being placed in ${unitWithFewestSoldiers.name}`,
+                LogLevel.Info
+            );
+
+            mod.SetTeam(player, unitWithFewestSoldiers.team);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    function setupPlayer(player: mod.Player): void {
+        Timers.setTimeout(() => {
+            deploymentManager.handlePlayerJoinGame(player);
+            Unit.handlePlayerJoinGame(player);
+            PlayerUI.handlePlayerJoinGame(player);
+        }, 3_000);
+    }
+
+    Events.OnPlayerJoinGame.subscribe((player: mod.Player) => {
+        if (placePlayer(player)) return setupPlayer(player);
+
+        // If the server just became full, disable player join.
+        if (!spectators.length) {
+            mod.DisablePlayerJoin();
+            logger.log(`Server is full, player join disabled`, LogLevel.Info);
+        }
+
+        mod.EnablePlayerDeploy(player, false);
+        spectators.push({ player, playerId: mod.GetObjId(player) });
+    });
+
+    Events.OnPlayerLeaveGame.subscribe((playerId: number) => {
+        if (removeSpectator(playerId)) {
+            logger.log(`Spectator P-${playerId} has left`, LogLevel.Warning);
+
+            return;
+        }
+
+        Soldier.handlePlayerLeaveGame(playerId);
+        PlayerUI.handlePlayerLeaveGame(playerId);
+
+        const spectator = spectators.shift();
+
+        if (spectator && placePlayer(spectator.player)) {
+            setupPlayer(spectator.player);
+        }
+    });
 
     // #endregion
 }

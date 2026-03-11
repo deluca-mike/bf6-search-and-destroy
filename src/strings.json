@@ -2,7 +2,8 @@
     "template": {
         "debug": {
             "buttons": {
-                "toggleTeam": "Toggle Team"
+                "toggleTeam": "Toggle Team",
+                "flipTeams": "Flip Teams"
             }
         }
     }

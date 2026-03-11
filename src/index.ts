@@ -6,8 +6,10 @@ import { DebugTool } from './debug-tool/index.ts';
 import { getPlayerStateVectorString } from './helpers/index.ts';
 import { SearchAndDestroy } from './search-and-destroy/index.ts';
 
-const OBJECTIVE_1 = { x: 334.89, y: 69.32, z: 134.06, orientation: 90 };
-const OBJECTIVE_2 = { x: 342.36, y: 69.24, z: 137.11, orientation: 180 };
+const DEBUG = true;
+
+const OBJECTIVE_1 = { x: 342.4, y: 65.57, z: 72.32, orientation: 30 };
+const OBJECTIVE_2 = { x: 329.2, y: 65.76, z: 112.09, orientation: 270 };
 
 const roundObjectives: SearchAndDestroy.RoundObjectives[] = [
     [OBJECTIVE_1, OBJECTIVE_2],
@@ -21,14 +23,14 @@ let adminDebugTool: DebugTool | undefined;
 let telemetryInterval: number | undefined;
 
 function createAdminDebugTool(player: mod.Player): void {
-    if (mod.GetObjId(player) != 0) return;
+    if (!DEBUG || mod.GetObjId(player) !== 0) return;
 
     const debugToolOptions: DebugTool.Options = {
         staticLogger: {
-            visible: false,
+            visible: true,
         },
         dynamicLogger: {
-            visible: false,
+            visible: true,
             width: 700,
             height: 800,
         },
@@ -48,6 +50,11 @@ function createAdminDebugTool(player: mod.Player): void {
         mod.SetTeam(player, mod.GetTeam(mod.GetObjId(mod.GetTeam(player)) === 1 ? 2 : 1));
     });
 
+    adminDebugTool?.addDebugMenuButton(mod.Message(mod.stringkeys.template.debug.buttons.flipTeams), () => {
+        adminDebugTool?.dynamicLog(`Flipping teams`);
+        mod.SwitchTeams(mod.GetTeam(1), mod.GetTeam(2));
+    });
+
     // Log a message to the static logger.
     adminDebugTool?.staticLog(`Triple-click interact key to open debug menu.`, 0);
 
@@ -57,7 +64,7 @@ function createAdminDebugTool(player: mod.Player): void {
 }
 
 function destroyAdminDebugTool(playerId: number): void {
-    if (playerId !== 0) return;
+    if (!DEBUG || playerId !== 0) return;
 
     Timers.clearInterval(telemetryInterval);
     adminDebugTool?.destroy();
@@ -68,7 +75,7 @@ function destroyAdminDebugTool(playerId: number): void {
 function showTelemetry(player: mod.Player): void {
     // The admin player is player id 0 for non-persistent test servers,
     // so don't do the rest of this unless it's the admin player.
-    if (mod.GetObjId(player) != 0) return;
+    if (!DEBUG || mod.GetObjId(player) !== 0) return;
 
     // Log the admin's position and facing direction to the static logger, in rows 1 and 2, every second.
     telemetryInterval = Timers.setInterval(() => {
@@ -87,7 +94,7 @@ function showTelemetry(player: mod.Player): void {
 function stopTelemetry(player: mod.Player): void {
     // The admin player is player id 0 for non-persistent test servers,
     // so don't do the rest of this unless it's the admin player.
-    if (mod.GetObjId(player) != 0) return;
+    if (!DEBUG || mod.GetObjId(player) !== 0) return;
 
     // Clear the telemetry interval so it doesn't continue to log the admin's position and facing direction.
     Timers.clearInterval(telemetryInterval);

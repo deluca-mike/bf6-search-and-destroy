@@ -31,6 +31,13 @@
         "defeat": "DEFEAT",
         "victoryReason": "WE WON {} ROUNDS",
         "defeatReason": "WE LOST {} ROUNDS",
-        "gameEndCountdown": "GAME ENDING IN {}"
+        "gameEndCountdown": "GAME ENDING IN {}",
+        "scoreboard": {
+            "columns": {
+                "kills": "KILLS",
+                "assists": "ASSISTS",
+                "deaths": "DEATHS"
+            }
+        }
     }
 }
