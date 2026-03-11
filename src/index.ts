@@ -8,8 +8,8 @@ import { SearchAndDestroy } from './search-and-destroy/index.ts';
 
 const DEBUG = true;
 
-const OBJECTIVE_1 = { x: 342.4, y: 65.57, z: 72.32, orientation: 30 };
-const OBJECTIVE_2 = { x: 329.2, y: 65.76, z: 112.09, orientation: 270 };
+const OBJECTIVE_1 = { x: 342.17, y: 65.57, z: 72.12, orientation: 45 };
+const OBJECTIVE_2 = { x: 335.05, y: 65.77, z: 111.93, orientation: 90 };
 
 const roundObjectives: SearchAndDestroy.RoundObjectives[] = [
     [OBJECTIVE_1, OBJECTIVE_2],

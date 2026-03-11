@@ -2021,6 +2021,7 @@ export namespace SearchAndDestroy {
             onComplete: () => {
                 PlayerUI.deleteGameStartUIs();
                 handleNewRound(ALPHA_UNIT, BRAVO_UNIT, gameOptions.roundObjectives.shift()!);
+                playSwitchSidesVoiceOvers();
             },
             onSecond: updateClock,
         });
